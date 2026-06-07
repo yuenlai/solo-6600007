@@ -477,6 +477,61 @@ def get_history():
     conn.close()
     return jsonify(history)
 
+@app.route('/api/songs/<song_id>', methods=['GET'])
+def get_song_detail(song_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT id, title, artist, fingerprint_hash, fingerprint_peaks, fingerprint_robust,
+               duration_sec, created_at
+        FROM songs WHERE id = ?
+    ''', (song_id,))
+    row = cursor.fetchone()
+    conn.close()
+    
+    if not row:
+        return jsonify({
+            'error': 'song_not_found',
+            'message': 'Song not found'
+        }), 404
+    
+    song = {
+        'id': row['id'],
+        'title': row['title'],
+        'artist': row['artist'],
+        'fingerprint_hash': row['fingerprint_hash'],
+        'fingerprint_peaks': row['fingerprint_peaks'],
+        'fingerprint_robust': row['fingerprint_robust'],
+        'duration_sec': row['duration_sec'],
+        'created_at': row['created_at']
+    }
+    return jsonify(song)
+
+@app.route('/api/songs/<song_id>/history', methods=['GET'])
+def get_song_history(song_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT id, match_found, song_id, song_title, song_artist, 
+               confidence, processing_time_ms, created_at
+        FROM recognition_history WHERE song_id = ? ORDER BY created_at DESC LIMIT 50
+    ''', (song_id,))
+    rows = cursor.fetchall()
+    history = []
+    for row in rows:
+        history.append({
+            'id': row['id'],
+            'match_found': bool(row['match_found']),
+            'song_id': row['song_id'],
+            'song_title': row['song_title'],
+            'song_artist': row['song_artist'],
+            'confidence': row['confidence'],
+            'processing_time_ms': row['processing_time_ms'],
+            'created_at': row['created_at']
+        })
+    conn.close()
+    return jsonify(history)
+
 if __name__ == '__main__':
     init_db()
     print("=" * 60)
@@ -487,11 +542,13 @@ if __name__ == '__main__':
     print("Database:", DB_PATH)
     print()
     print("Available endpoints:")
-    print("  GET  /api/health       - Health check")
-    print("  GET  /api/songs        - List all songs from SQLite")
-    print("  POST /api/songs/upload - Upload a new song (writes to SQLite)")
-    print("  POST /api/recognize    - Recognize audio (multipart file upload)")
-    print("  GET  /api/history      - Get recognition history")
+    print("  GET  /api/health             - Health check")
+    print("  GET  /api/songs              - List all songs from SQLite")
+    print("  GET  /api/songs/<id>         - Get song detail by ID")
+    print("  GET  /api/songs/<id>/history - Get recognition history for a song")
+    print("  POST /api/songs/upload       - Upload a new song (writes to SQLite)")
+    print("  POST /api/recognize          - Recognize audio (multipart file upload)")
+    print("  GET  /api/history            - Get recognition history")
     print()
     print("💡 Features:")
     print("   - REAL FFT-based fingerprinting")
