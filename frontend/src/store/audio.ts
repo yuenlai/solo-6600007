@@ -4,10 +4,13 @@ import { Song, RecognizeResult, UploadSongResponse, RecognitionHistoryItem, Batc
 
 const API_BASE = 'http://127.0.0.1:8080/api';
 
+const ONBOARDING_KEY = 'audioid_onboarding_completed';
+
 interface AudioState {
   songs: Song[];
   pendingSongs: Song[];
   recognizeResult: RecognizeResult | null;
+  isOnboardingCompleted: boolean;
   isRecording: boolean;
   audioLevel: number;
   isUploading: boolean;
@@ -97,12 +100,16 @@ interface AudioState {
   removeSongFromPlaylist: (playlistId: string, songId: string) => Promise<boolean>;
   setCurrentPlaylistId: (id: string | null) => void;
   clearPlaylistError: () => void;
+  checkOnboardingStatus: () => void;
+  resetOnboarding: () => void;
+  completeOnboarding: () => void;
 }
 
 export const useAudioStore = create<AudioState>((set) => ({
   songs: [],
   pendingSongs: [],
   recognizeResult: null,
+  isOnboardingCompleted: false,
   isRecording: false,
   audioLevel: 0,
   isUploading: false,
@@ -855,4 +862,19 @@ export const useAudioStore = create<AudioState>((set) => ({
     set({ currentPlaylistId: id, currentPlaylist: null, currentPlaylistSongs: [] }),
 
   clearPlaylistError: () => set({ playlistError: null }),
+
+  checkOnboardingStatus: () => {
+    const completed = localStorage.getItem(ONBOARDING_KEY) === 'true';
+    set({ isOnboardingCompleted: completed });
+  },
+
+  resetOnboarding: () => {
+    localStorage.removeItem(ONBOARDING_KEY);
+    set({ isOnboardingCompleted: false });
+  },
+
+  completeOnboarding: () => {
+    localStorage.setItem(ONBOARDING_KEY, 'true');
+    set({ isOnboardingCompleted: true });
+  },
 }));

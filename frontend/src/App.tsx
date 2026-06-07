@@ -8,6 +8,7 @@ import { PendingQueue } from './components/PendingQueue';
 import { FailedSamples } from './components/FailedSamples';
 import { PlaylistManager } from './components/PlaylistManager';
 import { AddToPlaylist } from './components/AddToPlaylist';
+import { OnboardingGuide } from './components/OnboardingGuide';
 import { useAudioStore } from './store/audio';
 
 const App: React.FC = () => {
@@ -24,16 +25,17 @@ const App: React.FC = () => {
       <nav style={{ width: '200px', background: '#0d1b2a', color: '#fff', padding: '20px 0' }}>
         <h2 style={{ margin: '0 0 20px', padding: '0 16px', fontSize: '15px' }}>🎵 AudioID</h2>
         {[
-          { key: 'recognize', label: '🎤 识别' },
+          { key: 'recognize', label: '🎤 识别', onboarding: 'recognize' },
           { key: 'compare', label: '🔄 对比识别' },
-          { key: 'library', label: '📚 指纹库' },
+          { key: 'library', label: '📚 指纹库', onboarding: 'library' },
           { key: 'playlists', label: '🎵 歌单收藏' },
           { key: 'queue', label: `⏳ 待处理${pendingCount > 0 ? ` (${pendingCount})` : ''}` },
           { key: 'failed', label: `🗑️ 失败样本${failedCount > 0 ? ` (${failedCount})` : ''}` },
-          { key: 'history', label: '📋 历史' },
+          { key: 'history', label: '📋 历史', onboarding: 'history' },
         ].map(t => (
           <button
             key={t.key}
+            data-onboarding={t.onboarding}
             onClick={() => {
               setCurrentSongId(null);
               setTab(t.key as any);
@@ -163,6 +165,7 @@ const App: React.FC = () => {
           }}
         />
       )}
+      <OnboardingGuide />
     </div>
   );
 };
