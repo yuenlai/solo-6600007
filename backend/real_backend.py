@@ -43,6 +43,19 @@ def init_db():
     except sqlite3.OperationalError:
         pass
     
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS recognition_history (
+            id TEXT PRIMARY KEY,
+            match_found INTEGER NOT NULL,
+            song_id TEXT,
+            song_title TEXT,
+            song_artist TEXT,
+            confidence REAL NOT NULL,
+            processing_time_ms INTEGER NOT NULL,
+            created_at TEXT DEFAULT (datetime('now'))
+        )
+    ''')
+    
     conn.commit()
     conn.close()
     print(f"✅ Database initialized at {DB_PATH}")
@@ -382,7 +395,23 @@ def recognize():
         processing_time_ms = int((time.time() - start) * 1000)
         confidence_threshold = 0.15
         
+        history_id = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc).isoformat()
+        
         if best_match and best_confidence >= confidence_threshold:
+            confidence = min(best_confidence, 1.0)
+            
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO recognition_history (id, match_found, song_id, song_title, song_artist, 
+                                                confidence, processing_time_ms, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (history_id, 1, best_match['id'], best_match['title'], best_match['artist'],
+                  confidence, processing_time_ms, created_at))
+            conn.commit()
+            conn.close()
+            
             return jsonify({
                 'match_found': True,
                 'song': {
@@ -391,10 +420,20 @@ def recognize():
                     'artist': best_match['artist'],
                     'duration_sec': best_match['duration_sec']
                 },
-                'confidence': min(best_confidence, 1.0),
+                'confidence': confidence,
                 'processing_time_ms': processing_time_ms
             })
         else:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO recognition_history (id, match_found, song_id, song_title, song_artist, 
+                                                confidence, processing_time_ms, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (history_id, 0, None, None, None, 0.0, processing_time_ms, created_at))
+            conn.commit()
+            conn.close()
+            
             return jsonify({
                 'match_found': False,
                 'song': None,
@@ -413,6 +452,31 @@ def recognize():
             'processing_time_ms': 0
         })
 
+@app.route('/api/history', methods=['GET'])
+def get_history():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT id, match_found, song_id, song_title, song_artist, 
+               confidence, processing_time_ms, created_at
+        FROM recognition_history ORDER BY created_at DESC LIMIT 100
+    ''')
+    rows = cursor.fetchall()
+    history = []
+    for row in rows:
+        history.append({
+            'id': row['id'],
+            'match_found': bool(row['match_found']),
+            'song_id': row['song_id'],
+            'song_title': row['song_title'],
+            'song_artist': row['song_artist'],
+            'confidence': row['confidence'],
+            'processing_time_ms': row['processing_time_ms'],
+            'created_at': row['created_at']
+        })
+    conn.close()
+    return jsonify(history)
+
 if __name__ == '__main__':
     init_db()
     print("=" * 60)
@@ -427,10 +491,12 @@ if __name__ == '__main__':
     print("  GET  /api/songs        - List all songs from SQLite")
     print("  POST /api/songs/upload - Upload a new song (writes to SQLite)")
     print("  POST /api/recognize    - Recognize audio (multipart file upload)")
+    print("  GET  /api/history      - Get recognition history")
     print()
     print("💡 Features:")
     print("   - REAL FFT-based fingerprinting")
     print("   - 3-level matching: robust FPS -> peaks -> hash")
     print("   - SQLite persistence")
+    print("   - Recognition history tracking")
     print("=" * 60)
     app.run(host='127.0.0.1', port=8080, debug=False)
