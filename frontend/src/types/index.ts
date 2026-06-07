@@ -3,6 +3,8 @@ export interface Song {
   title: string;
   artist: string | null;
   fingerprint_hash: string;
+  fingerprint_peaks?: string | null;
+  fingerprint_robust?: string | null;
   duration_sec: number | null;
   created_at?: string;
 }
