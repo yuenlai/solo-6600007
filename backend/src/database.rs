@@ -93,3 +93,67 @@ pub async fn delete_song(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error>
         .await?;
     Ok(())
 }
+
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct RecognitionHistory {
+    pub id: String,
+    pub match_found: bool,
+    pub song_id: Option<String>,
+    pub song_title: Option<String>,
+    pub song_artist: Option<String>,
+    pub confidence: f32,
+    pub processing_time_ms: i64,
+    pub created_at: String,
+}
+
+pub async fn init_history_table(pool: &SqlitePool) {
+    sqlx::query(r#"
+        CREATE TABLE IF NOT EXISTS recognition_history (
+            id TEXT PRIMARY KEY,
+            match_found INTEGER NOT NULL,
+            song_id TEXT,
+            song_title TEXT,
+            song_artist TEXT,
+            confidence REAL NOT NULL,
+            processing_time_ms INTEGER NOT NULL,
+            created_at TEXT DEFAULT (datetime('now'))
+        )
+    "#).execute(pool).await.expect("Failed to init history table");
+}
+
+pub async fn insert_recognition_history(
+    pool: &SqlitePool,
+    id: &str,
+    match_found: bool,
+    song_id: Option<&str>,
+    song_title: Option<&str>,
+    song_artist: Option<&str>,
+    confidence: f32,
+    processing_time_ms: i64,
+) -> Result<(), sqlx::Error> {
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "INSERT INTO recognition_history (id, match_found, song_id, song_title, song_artist, confidence, processing_time_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+    .bind(id)
+    .bind(match_found)
+    .bind(song_id)
+    .bind(song_title)
+    .bind(song_artist)
+    .bind(confidence)
+    .bind(processing_time_ms)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_recognition_history(pool: &SqlitePool, limit: i32) -> Result<Vec<RecognitionHistory>, sqlx::Error> {
+    let history = sqlx::query_as::<_, RecognitionHistory>(
+        "SELECT id, match_found, song_id, song_title, song_artist, confidence, processing_time_ms, created_at FROM recognition_history ORDER BY created_at DESC LIMIT ?"
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(history)
+}

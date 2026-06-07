@@ -9,7 +9,7 @@ use sqlx::SqlitePool;
 mod fingerprint;
 mod database;
 
-use database::Song;
+use database::{Song, RecognitionHistory};
 
 #[derive(Serialize)]
 struct HealthResponse { status: String, service: String }
@@ -148,6 +148,18 @@ async fn recognize_audio(
 
     let response = match best_match {
         Some((song, confidence)) if confidence >= confidence_threshold => {
+            let history_id = Uuid::new_v4().to_string();
+            let _ = database::insert_recognition_history(
+                &pool,
+                &history_id,
+                true,
+                Some(&song.id),
+                Some(&song.title),
+                song.artist.as_deref(),
+                confidence.min(1.0),
+                processing_time_ms as i64,
+            ).await;
+
             RecognizeResponse {
                 match_found: true,
                 song: Some(SongMatch {
@@ -161,6 +173,18 @@ async fn recognize_audio(
             }
         }
         _ => {
+            let history_id = Uuid::new_v4().to_string();
+            let _ = database::insert_recognition_history(
+                &pool,
+                &history_id,
+                false,
+                None,
+                None,
+                None,
+                0.0,
+                processing_time_ms as i64,
+            ).await;
+
             RecognizeResponse {
                 match_found: false,
                 song: None,
@@ -179,6 +203,16 @@ async fn list_songs(pool: web::Data<SqlitePool>) -> HttpResponse {
         Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
             error: "database_error".to_string(),
             message: format!("Failed to fetch songs: {}", e),
+        }),
+    }
+}
+
+async fn get_history(pool: web::Data<SqlitePool>) -> HttpResponse {
+    match database::get_recognition_history(&pool, 100).await {
+        Ok(history) => HttpResponse::Ok().json(history),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch history: {}", e),
         }),
     }
 }
@@ -297,6 +331,7 @@ async fn main() -> std::io::Result<()> {
 
     let pool = database::create_pool().await;
     database::init_db(&pool).await;
+    database::init_history_table(&pool).await;
     println!("Database initialized");
 
     HttpServer::new(move || {
@@ -308,5 +343,6 @@ async fn main() -> std::io::Result<()> {
             .route("/api/recognize", web::post().to(recognize_audio))
             .route("/api/songs", web::get().to(list_songs))
             .route("/api/songs/upload", web::post().to(upload_song))
+            .route("/api/history", web::get().to(get_history))
     }).bind("127.0.0.1:8080")?.run().await
 }

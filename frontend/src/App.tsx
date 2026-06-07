@@ -1,17 +1,18 @@
 import React, { useState } from 'react';
 import { Recorder } from './components/Recorder';
 import { SongLibrary } from './components/SongLibrary';
+import { RecognitionHistory } from './components/RecognitionHistory';
 import { useAudioStore } from './store/audio';
 
 const App: React.FC = () => {
-  const [tab, setTab] = useState<'recognize' | 'library'>('recognize');
+  const [tab, setTab] = useState<'recognize' | 'library' | 'history'>('recognize');
   const { recognizeResult } = useAudioStore();
 
   return (
     <div style={{ display: 'flex', height: '100vh', fontFamily: 'sans-serif' }}>
       <nav style={{ width: '200px', background: '#0d1b2a', color: '#fff', padding: '20px 0' }}>
         <h2 style={{ margin: '0 0 20px', padding: '0 16px', fontSize: '15px' }}>🎵 AudioID</h2>
-        {[{ key: 'recognize', label: '🎤 识别' }, { key: 'library', label: '📚 指纹库' }].map(t => (
+        {[{ key: 'recognize', label: '🎤 识别' }, { key: 'library', label: '📚 指纹库' }, { key: 'history', label: '📋 历史' }].map(t => (
           <button key={t.key} onClick={() => setTab(t.key as any)} style={{
             display: 'block', width: '100%', padding: '12px 16px', border: 'none', textAlign: 'left',
             cursor: 'pointer', background: tab === t.key ? 'rgba(255,255,255,0.1)' : 'transparent', color: '#fff'
@@ -48,6 +49,7 @@ const App: React.FC = () => {
           </div>
         )}
         {tab === 'library' && <SongLibrary />}
+        {tab === 'history' && <RecognitionHistory />}
       </main>
     </div>
   );

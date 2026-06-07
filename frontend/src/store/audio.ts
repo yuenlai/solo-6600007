@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import axios from 'axios';
-import { Song, RecognizeResult, UploadSongResponse } from '../types';
+import { Song, RecognizeResult, UploadSongResponse, RecognitionHistoryItem } from '../types';
 
 const API_BASE = 'http://127.0.0.1:8080/api';
 
@@ -14,9 +14,12 @@ interface AudioState {
   recognizeError: string | null;
   uploadError: string | null;
   uploadSuccess: UploadSongResponse | null;
+  history: RecognitionHistoryItem[];
+  isFetchingHistory: boolean;
   fetchSongs: () => Promise<void>;
   uploadSong: (title: string, artist: string, file: File) => Promise<boolean>;
   recognizeFile: (file: File) => Promise<boolean>;
+  fetchHistory: () => Promise<void>;
   setSongs: (songs: Song[]) => void;
   setRecognizeResult: (r: RecognizeResult | null) => void;
   setRecording: (v: boolean) => void;
@@ -35,6 +38,8 @@ export const useAudioStore = create<AudioState>((set) => ({
   recognizeError: null,
   uploadError: null,
   uploadSuccess: null,
+  history: [],
+  isFetchingHistory: false,
 
   fetchSongs: async () => {
     try {
@@ -97,4 +102,15 @@ export const useAudioStore = create<AudioState>((set) => ({
   setAudioLevel: (v) => set({ audioLevel: v }),
   clearUploadStatus: () => set({ uploadError: null, uploadSuccess: null }),
   clearRecognizeStatus: () => set({ recognizeError: null, recognizeResult: null }),
+
+  fetchHistory: async () => {
+    set({ isFetchingHistory: true });
+    try {
+      const response = await axios.get<RecognitionHistoryItem[]>(`${API_BASE}/history`);
+      set({ history: response.data, isFetchingHistory: false });
+    } catch (error) {
+      console.error('Failed to fetch history:', error);
+      set({ isFetchingHistory: false });
+    }
+  },
 }));

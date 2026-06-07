@@ -31,3 +31,14 @@ export interface UploadSongResponse {
   status: string;
   message: string;
 }
+
+export interface RecognitionHistoryItem {
+  id: string;
+  match_found: boolean;
+  song_id: string | null;
+  song_title: string | null;
+  song_artist: string | null;
+  confidence: number;
+  processing_time_ms: number;
+  created_at: string;
+}
