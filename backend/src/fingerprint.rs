@@ -1,4 +1,61 @@
 use rustfft::{FftPlanner, num_complex::Complex};
+use hound::WavReader;
+use std::io::Cursor;
+
+#[derive(Debug)]
+pub enum AudioError {
+    HoundError(hound::Error),
+    InvalidFormat(String),
+}
+
+impl From<hound::Error> for AudioError {
+    fn from(err: hound::Error) -> Self {
+        AudioError::HoundError(err)
+    }
+}
+
+pub struct AudioData {
+    pub samples: Vec<f32>,
+    pub sample_rate: u32,
+    pub duration_sec: f64,
+}
+
+pub fn read_wav_from_bytes(bytes: &[u8]) -> Result<AudioData, AudioError> {
+    let cursor = Cursor::new(bytes);
+    let mut reader = WavReader::new(cursor)?;
+    let spec = reader.spec();
+
+    if spec.channels != 1 && spec.channels != 2 {
+        return Err(AudioError::InvalidFormat(
+            format!("Unsupported channel count: {}", spec.channels)
+        ));
+    }
+
+    let sample_rate = spec.sample_rate;
+    let duration_sec = reader.duration() as f64 / sample_rate as f64;
+
+    let samples: Vec<f32> = match spec.sample_format {
+        hound::SampleFormat::Float => {
+            reader.samples::<f32>()
+                .step_by(spec.channels as usize)
+                .map(|s| s.unwrap_or(0.0))
+                .collect()
+        }
+        hound::SampleFormat::Int => {
+            let bits = spec.bits_per_sample as i32;
+            let max_val = (1i64 << (bits - 1)) - 1;
+            reader.samples::<i32>()
+                .step_by(spec.channels as usize)
+                .map(|s| {
+                    let sample = s.unwrap_or(0) as f64;
+                    (sample / max_val as f64) as f32
+                })
+                .collect()
+        }
+    };
+
+    Ok(AudioData { samples, sample_rate, duration_sec })
+}
 
 /// Extract spectral peaks from audio samples using FFT
 pub fn extract_peaks(samples: &[f32], sample_rate: usize) -> Vec<(usize, f32)> {
@@ -14,7 +71,6 @@ pub fn extract_peaks(samples: &[f32], sample_rate: usize) -> Vec<(usize, f32)> {
             .iter().map(|&s| Complex::new(s, 0.0)).collect();
         fft.process(&mut buffer);
 
-        // Find spectral peaks in magnitude spectrum
         for i in 2..buffer.len() / 2 - 1 {
             let mag = buffer[i].norm();
             let prev = buffer[i - 1].norm();
@@ -40,4 +96,11 @@ pub fn generate_hash(peaks: &[(usize, f32)]) -> String {
         (*v as u32).hash(&mut hasher);
     }
     format!("{:016x}", hasher.finish())
+}
+
+pub fn process_audio_and_generate_fingerprint(bytes: &[u8]) -> Result<(String, f64), AudioError> {
+    let audio_data = read_wav_from_bytes(bytes)?;
+    let peaks = extract_peaks(&audio_data.samples, audio_data.sample_rate as usize);
+    let hash = generate_hash(&peaks);
+    Ok((hash, audio_data.duration_sec))
 }
