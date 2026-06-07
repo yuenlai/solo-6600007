@@ -88,7 +88,7 @@ async fn recognize_audio(
         }
     };
 
-    let (_, _, input_peaks) = match fingerprint::process_audio_and_generate_fingerprint(&audio_bytes) {
+    let (input_hash, _, input_peaks, input_robust) = match fingerprint::process_audio_and_generate_fingerprint(&audio_bytes) {
         Ok(result) => result,
         Err(e) => {
             return Ok(HttpResponse::BadRequest().json(ErrorResponse {
@@ -111,24 +111,40 @@ async fn recognize_audio(
     let mut best_match: Option<(database::Song, f32)> = None;
 
     for song in songs {
+        let mut max_similarity = 0.0f32;
+
+        if let Some(robust_str) = &song.fingerprint_robust {
+            if let Ok(stored_robust) = serde_json::from_str::<Vec<u64>>(robust_str) {
+                let sim = fingerprint::calculate_robust_similarity(&input_robust, &stored_robust);
+                max_similarity = max_similarity.max(sim * 1.2);
+            }
+        }
+
         if let Some(peaks_str) = &song.fingerprint_peaks {
             if let Ok(stored_peaks) = serde_json::from_str::<Vec<(usize, f32)>>(peaks_str) {
-                let similarity = fingerprint::calculate_similarity(&input_peaks, &stored_peaks);
-                match &best_match {
-                    Some((_, best_sim)) if similarity > *best_sim => {
-                        best_match = Some((song, similarity));
-                    }
-                    None => {
-                        best_match = Some((song, similarity));
-                    }
-                    _ => {}
-                }
+                let sim = fingerprint::calculate_similarity(&input_peaks, &stored_peaks);
+                max_similarity = max_similarity.max(sim);
             }
+        }
+
+        if max_similarity < 0.05 {
+            let hash_sim = fingerprint::calculate_hash_similarity(&input_hash, &song.fingerprint_hash);
+            max_similarity = max_similarity.max(hash_sim * 0.8);
+        }
+
+        match &best_match {
+            Some((_, best_sim)) if max_similarity > *best_sim => {
+                best_match = Some((song, max_similarity));
+            }
+            None => {
+                best_match = Some((song, max_similarity));
+            }
+            _ => {}
         }
     }
 
     let processing_time_ms = start.elapsed().as_millis() as u64;
-    let confidence_threshold = 0.1;
+    let confidence_threshold = 0.15;
 
     let response = match best_match {
         Some((song, confidence)) if confidence >= confidence_threshold => {
@@ -140,7 +156,7 @@ async fn recognize_audio(
                     artist: song.artist,
                     duration_sec: song.duration_sec,
                 }),
-                confidence,
+                confidence: confidence.min(1.0),
                 processing_time_ms,
             }
         }
@@ -229,8 +245,8 @@ async fn upload_song(
         }
     };
 
-    let (fingerprint_hash, duration_sec, peaks) = match fingerprint::process_audio_and_generate_fingerprint(&audio_bytes) {
-        Ok((hash, duration, peaks)) => (hash, duration as i64, peaks),
+    let (fingerprint_hash, duration_sec, peaks, robust) = match fingerprint::process_audio_and_generate_fingerprint(&audio_bytes) {
+        Ok((hash, duration, peaks, robust)) => (hash, duration as i64, peaks, robust),
         Err(e) => {
             return Ok(HttpResponse::BadRequest().json(ErrorResponse {
                 error: "audio_processing_error".to_string(),
@@ -240,6 +256,7 @@ async fn upload_song(
     };
 
     let peaks_json = serde_json::to_string(&peaks).ok();
+    let robust_json = serde_json::to_string(&robust).ok();
 
     let song_id = Uuid::new_v4().to_string();
 
@@ -250,6 +267,7 @@ async fn upload_song(
         artist.as_deref(),
         &fingerprint_hash,
         peaks_json.as_deref(),
+        robust_json.as_deref(),
         Some(duration_sec),
     ).await {
         Ok(_) => {
