@@ -11,7 +11,7 @@ use std::fmt;
 mod fingerprint;
 mod database;
 
-use database::{Song, RecognitionHistory, RankedSong, TrendingSong, FailedSample, SimilarSong, Playlist, PlaylistSongDetail, ReviewTask, get_pending_songs};
+use database::{Song, RecognitionHistory, RankedSong, TrendingSong, FailedSample, SimilarSong, Playlist, PlaylistSongDetail, ReviewTask, Tag, get_pending_songs};
 
 #[derive(Serialize)]
 struct HealthResponse { status: String, service: String }
@@ -162,6 +162,45 @@ struct ReviewTasksResponse {
 #[derive(Deserialize)]
 struct ReRecognizeRequest {
     task_id: String,
+}
+
+#[derive(Deserialize)]
+struct CreateTagRequest {
+    name: String,
+    category: String,
+}
+
+#[derive(Deserialize)]
+struct UpdateTagRequest {
+    name: String,
+}
+
+#[derive(Serialize)]
+struct TagsResponse {
+    total: usize,
+    tags: Vec<Tag>,
+}
+
+#[derive(Serialize)]
+struct SongTagsResponse {
+    total: usize,
+    tags: Vec<Tag>,
+}
+
+#[derive(Deserialize)]
+struct AddTagToSongRequest {
+    tag_id: String,
+}
+
+#[derive(Deserialize)]
+struct BatchAddTagsRequest {
+    tag_ids: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct SongsByTagsResponse {
+    total: usize,
+    songs: Vec<Song>,
 }
 
 fn convert_playlist(p: Playlist) -> PlaylistResponse {
@@ -1135,6 +1174,345 @@ async fn get_low_confidence_recognitions(
     }
 }
 
+async fn create_tag(
+    body: web::Json<CreateTagRequest>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    if body.name.is_empty() {
+        return HttpResponse::BadRequest().json(ErrorResponse {
+            error: "missing_name".to_string(),
+            message: "Tag name is required".to_string(),
+        });
+    }
+
+    if !["style", "scene", "mood"].contains(&body.category.as_str()) {
+        return HttpResponse::BadRequest().json(ErrorResponse {
+            error: "invalid_category".to_string(),
+            message: "Invalid category. Must be one of: style, scene, mood".to_string(),
+        });
+    }
+
+    if let Ok(Some(_)) = database::get_tag_by_name_and_category(&pool, &body.name, &body.category).await {
+        return HttpResponse::BadRequest().json(ErrorResponse {
+            error: "tag_exists".to_string(),
+            message: "Tag with this name and category already exists".to_string(),
+        });
+    }
+
+    let tag_id = Uuid::new_v4().to_string();
+    match database::create_tag(&pool, &tag_id, &body.name, &body.category).await {
+        Ok(_) => match database::get_tag_by_id(&pool, &tag_id).await {
+            Ok(Some(tag)) => HttpResponse::Ok().json(tag),
+            _ => HttpResponse::InternalServerError().json(ErrorResponse {
+                error: "create_error".to_string(),
+                message: "Failed to create tag".to_string(),
+            }),
+        },
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to create tag: {}", e),
+        }),
+    }
+}
+
+async fn list_tags(
+    query: web::Query<std::collections::HashMap<String, String>>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    let category = query.get("category").map(|c| c.as_str());
+
+    match database::get_all_tags(&pool, category).await {
+        Ok(tags) => HttpResponse::Ok().json(TagsResponse {
+            total: tags.len(),
+            tags,
+        }),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch tags: {}", e),
+        }),
+    }
+}
+
+async fn get_tag(
+    tag_id: web::Path<String>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    match database::get_tag_by_id(&pool, &tag_id).await {
+        Ok(Some(tag)) => HttpResponse::Ok().json(tag),
+        Ok(None) => HttpResponse::NotFound().json(ErrorResponse {
+            error: "tag_not_found".to_string(),
+            message: "Tag not found".to_string(),
+        }),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch tag: {}", e),
+        }),
+    }
+}
+
+async fn update_tag(
+    tag_id: web::Path<String>,
+    body: web::Json<UpdateTagRequest>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    if body.name.is_empty() {
+        return HttpResponse::BadRequest().json(ErrorResponse {
+            error: "missing_name".to_string(),
+            message: "Tag name is required".to_string(),
+        });
+    }
+
+    match database::get_tag_by_id(&pool, &tag_id).await {
+        Ok(Some(tag)) => {
+            if let Ok(Some(existing)) = database::get_tag_by_name_and_category(&pool, &body.name, &tag.category).await {
+                if existing.id != tag.id {
+                    return HttpResponse::BadRequest().json(ErrorResponse {
+                        error: "tag_exists".to_string(),
+                        message: "Tag with this name and category already exists".to_string(),
+                    });
+                }
+            }
+
+            match database::update_tag(&pool, &tag_id, &body.name).await {
+                Ok(_) => match database::get_tag_by_id(&pool, &tag_id).await {
+                    Ok(Some(updated_tag)) => HttpResponse::Ok().json(updated_tag),
+                    _ => HttpResponse::InternalServerError().json(ErrorResponse {
+                        error: "update_error".to_string(),
+                        message: "Failed to update tag".to_string(),
+                    }),
+                },
+                Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+                    error: "database_error".to_string(),
+                    message: format!("Failed to update tag: {}", e),
+                }),
+            }
+        }
+        Ok(None) => HttpResponse::NotFound().json(ErrorResponse {
+            error: "tag_not_found".to_string(),
+            message: "Tag not found".to_string(),
+        }),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch tag: {}", e),
+        }),
+    }
+}
+
+async fn delete_tag(
+    tag_id: web::Path<String>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    match database::get_tag_by_id(&pool, &tag_id).await {
+        Ok(Some(_)) => {
+            match database::delete_tag(&pool, &tag_id).await {
+                Ok(_) => HttpResponse::Ok().json(serde_json::json!({
+                    "status": "success",
+                    "message": "Tag deleted successfully"
+                })),
+                Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+                    error: "database_error".to_string(),
+                    message: format!("Failed to delete tag: {}", e),
+                }),
+            }
+        }
+        Ok(None) => HttpResponse::NotFound().json(ErrorResponse {
+            error: "tag_not_found".to_string(),
+            message: "Tag not found".to_string(),
+        }),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch tag: {}", e),
+        }),
+    }
+}
+
+async fn get_song_tags(
+    song_id: web::Path<String>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    match database::get_song_by_id(&pool, &song_id).await {
+        Ok(Some(_)) => {
+            match database::get_song_tags(&pool, &song_id).await {
+                Ok(tags) => HttpResponse::Ok().json(SongTagsResponse {
+                    total: tags.len(),
+                    tags,
+                }),
+                Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+                    error: "database_error".to_string(),
+                    message: format!("Failed to fetch song tags: {}", e),
+                }),
+            }
+        }
+        Ok(None) => HttpResponse::NotFound().json(ErrorResponse {
+            error: "song_not_found".to_string(),
+            message: "Song not found".to_string(),
+        }),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch song: {}", e),
+        }),
+    }
+}
+
+async fn add_tag_to_song(
+    song_id: web::Path<String>,
+    body: web::Json<AddTagToSongRequest>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    match database::get_song_by_id(&pool, &song_id).await {
+        Ok(Some(_)) => {
+            match database::get_tag_by_id(&pool, &body.tag_id).await {
+                Ok(Some(_)) => {
+                    match database::add_tag_to_song(&pool, &song_id, &body.tag_id).await {
+                        Ok(_) => HttpResponse::Ok().json(serde_json::json!({
+                            "status": "success",
+                            "message": "Tag added to song successfully"
+                        })),
+                        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+                            error: "database_error".to_string(),
+                            message: format!("Failed to add tag to song: {}", e),
+                        }),
+                    }
+                }
+                Ok(None) => HttpResponse::NotFound().json(ErrorResponse {
+                    error: "tag_not_found".to_string(),
+                    message: "Tag not found".to_string(),
+                }),
+                Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+                    error: "database_error".to_string(),
+                    message: format!("Failed to fetch tag: {}", e),
+                }),
+            }
+        }
+        Ok(None) => HttpResponse::NotFound().json(ErrorResponse {
+            error: "song_not_found".to_string(),
+            message: "Song not found".to_string(),
+        }),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch song: {}", e),
+        }),
+    }
+}
+
+async fn batch_add_tags_to_song(
+    song_id: web::Path<String>,
+    body: web::Json<BatchAddTagsRequest>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    match database::get_song_by_id(&pool, &song_id).await {
+        Ok(Some(_)) => {
+            let mut success_count = 0;
+            let mut failed_tags = Vec::new();
+
+            for tag_id in &body.tag_ids {
+                match database::get_tag_by_id(&pool, tag_id).await {
+                    Ok(Some(_)) => {
+                        if database::add_tag_to_song(&pool, &song_id, tag_id).await.is_ok() {
+                            success_count += 1;
+                        } else {
+                            failed_tags.push(tag_id.clone());
+                        }
+                    }
+                    _ => {
+                        failed_tags.push(tag_id.clone());
+                    }
+                }
+            }
+
+            HttpResponse::Ok().json(serde_json::json!({
+                "status": "success",
+                "success_count": success_count,
+                "failed_tags": failed_tags,
+                "message": format!("Added {} tags to song", success_count)
+            }))
+        }
+        Ok(None) => HttpResponse::NotFound().json(ErrorResponse {
+            error: "song_not_found".to_string(),
+            message: "Song not found".to_string(),
+        }),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch song: {}", e),
+        }),
+    }
+}
+
+async fn remove_tag_from_song(
+    path: web::Path<(String, String)>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    let (song_id, tag_id) = path.into_inner();
+
+    match database::get_song_by_id(&pool, &song_id).await {
+        Ok(Some(_)) => {
+            match database::remove_tag_from_song(&pool, &song_id, &tag_id).await {
+                Ok(_) => HttpResponse::Ok().json(serde_json::json!({
+                    "status": "success",
+                    "message": "Tag removed from song successfully"
+                })),
+                Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+                    error: "database_error".to_string(),
+                    message: format!("Failed to remove tag from song: {}", e),
+                }),
+            }
+        }
+        Ok(None) => HttpResponse::NotFound().json(ErrorResponse {
+            error: "song_not_found".to_string(),
+            message: "Song not found".to_string(),
+        }),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch song: {}", e),
+        }),
+    }
+}
+
+async fn get_songs_by_tags(
+    query: web::Query<std::collections::HashMap<String, String>>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    let empty = String::new();
+    let tag_ids_str = query.get("tag_ids").unwrap_or(&empty);
+    let tag_ids: Vec<String> = tag_ids_str
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if tag_ids.is_empty() {
+        return HttpResponse::BadRequest().json(ErrorResponse {
+            error: "missing_tag_ids".to_string(),
+            message: "At least one tag_id is required".to_string(),
+        });
+    }
+
+    let limit: i32 = query.get("limit")
+        .and_then(|l| l.parse().ok())
+        .unwrap_or(50);
+
+    let match_all = query.get("match_all")
+        .and_then(|m| m.parse().ok())
+        .unwrap_or(true);
+
+    let result = if match_all {
+        database::get_songs_by_tags(&pool, &tag_ids, limit).await
+    } else {
+        database::get_songs_by_any_tags(&pool, &tag_ids, limit).await
+    };
+
+    match result {
+        Ok(songs) => HttpResponse::Ok().json(SongsByTagsResponse {
+            total: songs.len(),
+            songs,
+        }),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch songs by tags: {}", e),
+        }),
+    }
+}
+
 async fn upload_song(
     mut payload: Multipart,
     pool: web::Data<SqlitePool>,
@@ -1419,6 +1797,7 @@ async fn main() -> std::io::Result<()> {
     database::init_failed_samples_table(&pool).await;
     database::init_playlists_tables(&pool).await;
     database::init_review_tasks_table(&pool).await;
+    database::init_tags_tables(&pool).await;
     println!("Database initialized");
 
     HttpServer::new(move || {
@@ -1460,5 +1839,15 @@ async fn main() -> std::io::Result<()> {
             .route("/api/review-tasks/{id}", web::delete().to(delete_review_task))
             .route("/api/review-tasks/{id}/status", web::put().to(update_review_task_status))
             .route("/api/review-tasks/{id}/re-recognize", web::post().to(re_recognize_review_task))
+            .route("/api/tags", web::post().to(create_tag))
+            .route("/api/tags", web::get().to(list_tags))
+            .route("/api/tags/{id}", web::get().to(get_tag))
+            .route("/api/tags/{id}", web::put().to(update_tag))
+            .route("/api/tags/{id}", web::delete().to(delete_tag))
+            .route("/api/songs/{id}/tags", web::get().to(get_song_tags))
+            .route("/api/songs/{id}/tags", web::post().to(add_tag_to_song))
+            .route("/api/songs/{id}/tags/batch", web::post().to(batch_add_tags_to_song))
+            .route("/api/songs/{song_id}/tags/{tag_id}", web::delete().to(remove_tag_from_song))
+            .route("/api/songs/by-tags", web::get().to(get_songs_by_tags))
     }).bind("127.0.0.1:8080")?.run().await
 }

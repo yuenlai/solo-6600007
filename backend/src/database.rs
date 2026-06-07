@@ -865,3 +865,281 @@ pub async fn get_low_confidence_history(
     .await?;
     Ok(history)
 }
+
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow, Clone)]
+pub struct Tag {
+    pub id: String,
+    pub name: String,
+    pub category: String,
+    pub created_at: String,
+    #[sqlx(default)]
+    pub song_count: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct SongTag {
+    pub song_id: String,
+    pub tag_id: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct SongWithTags {
+    pub id: String,
+    pub title: String,
+    pub artist: Option<String>,
+    pub fingerprint_hash: String,
+    pub fingerprint_peaks: Option<String>,
+    pub fingerprint_robust: Option<String>,
+    pub duration_sec: Option<i64>,
+    pub created_at: String,
+    pub status: String,
+    #[sqlx(default)]
+    pub tags: Option<String>,
+}
+
+pub async fn init_tags_tables(pool: &SqlitePool) {
+    sqlx::query(r#"
+        CREATE TABLE IF NOT EXISTS tags (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            category TEXT NOT NULL CHECK(category IN ('style', 'scene', 'mood')),
+            created_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(name, category)
+        )
+    "#).execute(pool).await.expect("Failed to init tags table");
+    
+    sqlx::query(r#"
+        CREATE TABLE IF NOT EXISTS song_tags (
+            song_id TEXT NOT NULL,
+            tag_id TEXT NOT NULL,
+            created_at TEXT DEFAULT (datetime('now')),
+            PRIMARY KEY (song_id, tag_id),
+            FOREIGN KEY (song_id) REFERENCES songs(id) ON DELETE CASCADE,
+            FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+        )
+    "#).execute(pool).await.expect("Failed to init song_tags table");
+    
+    sqlx::query(r#"
+        CREATE INDEX IF NOT EXISTS idx_song_tags_song_id ON song_tags(song_id)
+    "#).execute(pool).await.ok();
+    
+    sqlx::query(r#"
+        CREATE INDEX IF NOT EXISTS idx_song_tags_tag_id ON song_tags(tag_id)
+    "#).execute(pool).await.ok();
+}
+
+pub async fn create_tag(
+    pool: &SqlitePool,
+    id: &str,
+    name: &str,
+    category: &str,
+) -> Result<(), sqlx::Error> {
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "INSERT INTO tags (id, name, category, created_at) VALUES (?, ?, ?, ?)"
+    )
+    .bind(id)
+    .bind(name)
+    .bind(category)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_tag_by_id(pool: &SqlitePool, id: &str) -> Result<Option<Tag>, sqlx::Error> {
+    let tag = sqlx::query_as::<_, Tag>(r#"
+        SELECT t.id, t.name, t.category, t.created_at, COUNT(st.song_id) as song_count
+        FROM tags t
+        LEFT JOIN song_tags st ON t.id = st.tag_id
+        WHERE t.id = ?
+        GROUP BY t.id, t.name, t.category, t.created_at
+    "#)
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(tag)
+}
+
+pub async fn get_tag_by_name_and_category(
+    pool: &SqlitePool,
+    name: &str,
+    category: &str,
+) -> Result<Option<Tag>, sqlx::Error> {
+    let tag = sqlx::query_as::<_, Tag>(r#"
+        SELECT t.id, t.name, t.category, t.created_at, COUNT(st.song_id) as song_count
+        FROM tags t
+        LEFT JOIN song_tags st ON t.id = st.tag_id
+        WHERE t.name = ? AND t.category = ?
+        GROUP BY t.id, t.name, t.category, t.created_at
+    "#)
+    .bind(name)
+    .bind(category)
+    .fetch_optional(pool)
+    .await?;
+    Ok(tag)
+}
+
+pub async fn get_all_tags(pool: &SqlitePool, category: Option<&str>) -> Result<Vec<Tag>, sqlx::Error> {
+    let tags = match category {
+        Some(cat) => sqlx::query_as::<_, Tag>(r#"
+            SELECT t.id, t.name, t.category, t.created_at, COUNT(st.song_id) as song_count
+            FROM tags t
+            LEFT JOIN song_tags st ON t.id = st.tag_id
+            WHERE t.category = ?
+            GROUP BY t.id, t.name, t.category, t.created_at
+            ORDER BY t.name ASC
+        "#)
+        .bind(cat)
+        .fetch_all(pool)
+        .await?,
+        None => sqlx::query_as::<_, Tag>(r#"
+            SELECT t.id, t.name, t.category, t.created_at, COUNT(st.song_id) as song_count
+            FROM tags t
+            LEFT JOIN song_tags st ON t.id = st.tag_id
+            GROUP BY t.id, t.name, t.category, t.created_at
+            ORDER BY t.category ASC, t.name ASC
+        "#)
+        .fetch_all(pool)
+        .await?,
+    };
+    Ok(tags)
+}
+
+pub async fn update_tag(
+    pool: &SqlitePool,
+    id: &str,
+    name: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE tags SET name = ? WHERE id = ?"
+    )
+    .bind(name)
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn delete_tag(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM tags WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn add_tag_to_song(
+    pool: &SqlitePool,
+    song_id: &str,
+    tag_id: &str,
+) -> Result<(), sqlx::Error> {
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "INSERT OR IGNORE INTO song_tags (song_id, tag_id, created_at) VALUES (?, ?, ?)"
+    )
+    .bind(song_id)
+    .bind(tag_id)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn remove_tag_from_song(
+    pool: &SqlitePool,
+    song_id: &str,
+    tag_id: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "DELETE FROM song_tags WHERE song_id = ? AND tag_id = ?"
+    )
+    .bind(song_id)
+    .bind(tag_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_song_tags(pool: &SqlitePool, song_id: &str) -> Result<Vec<Tag>, sqlx::Error> {
+    let tags = sqlx::query_as::<_, Tag>(r#"
+        SELECT t.id, t.name, t.category, t.created_at
+        FROM tags t
+        JOIN song_tags st ON t.id = st.tag_id
+        WHERE st.song_id = ?
+        ORDER BY t.category ASC, t.name ASC
+    "#)
+    .bind(song_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(tags)
+}
+
+pub async fn get_songs_by_tags(
+    pool: &SqlitePool,
+    tag_ids: &[String],
+    limit: i32,
+) -> Result<Vec<Song>, sqlx::Error> {
+    if tag_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    
+    let placeholders: Vec<String> = (0..tag_ids.len()).map(|_| "?".to_string()).collect();
+    let placeholder_str = placeholders.join(", ");
+    
+    let query = format!(r#"
+        SELECT s.id, s.title, s.artist, s.fingerprint_hash, s.fingerprint_peaks, 
+               s.fingerprint_robust, s.duration_sec, s.created_at, s.status
+        FROM songs s
+        JOIN song_tags st ON s.id = st.song_id
+        WHERE st.tag_id IN ({})
+        GROUP BY s.id, s.title, s.artist, s.fingerprint_hash, s.fingerprint_peaks,
+                 s.fingerprint_robust, s.duration_sec, s.created_at, s.status
+        HAVING COUNT(DISTINCT st.tag_id) = ?
+        ORDER BY s.created_at DESC
+        LIMIT ?
+    "#, placeholder_str);
+    
+    let mut query_builder = sqlx::query_as::<_, Song>(&query);
+    for tag_id in tag_ids {
+        query_builder = query_builder.bind(tag_id);
+    }
+    query_builder = query_builder.bind(tag_ids.len() as i64);
+    query_builder = query_builder.bind(limit);
+    
+    let songs = query_builder.fetch_all(pool).await?;
+    Ok(songs)
+}
+
+pub async fn get_songs_by_any_tags(
+    pool: &SqlitePool,
+    tag_ids: &[String],
+    limit: i32,
+) -> Result<Vec<Song>, sqlx::Error> {
+    if tag_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    
+    let placeholders: Vec<String> = (0..tag_ids.len()).map(|_| "?".to_string()).collect();
+    let placeholder_str = placeholders.join(", ");
+    
+    let query = format!(r#"
+        SELECT DISTINCT s.id, s.title, s.artist, s.fingerprint_hash, s.fingerprint_peaks, 
+                        s.fingerprint_robust, s.duration_sec, s.created_at, s.status
+        FROM songs s
+        JOIN song_tags st ON s.id = st.song_id
+        WHERE st.tag_id IN ({})
+        ORDER BY s.created_at DESC
+        LIMIT ?
+    "#, placeholder_str);
+    
+    let mut query_builder = sqlx::query_as::<_, Song>(&query);
+    for tag_id in tag_ids {
+        query_builder = query_builder.bind(tag_id);
+    }
+    query_builder = query_builder.bind(limit);
+    
+    let songs = query_builder.fetch_all(pool).await?;
+    Ok(songs)
+}
