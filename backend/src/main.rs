@@ -11,7 +11,7 @@ use std::fmt;
 mod fingerprint;
 mod database;
 
-use database::{Song, RecognitionHistory, RankedSong, TrendingSong, FailedSample, SimilarSong, Playlist, PlaylistSongDetail, get_pending_songs};
+use database::{Song, RecognitionHistory, RankedSong, TrendingSong, FailedSample, SimilarSong, Playlist, PlaylistSongDetail, ReviewTask, get_pending_songs};
 
 #[derive(Serialize)]
 struct HealthResponse { status: String, service: String }
@@ -145,6 +145,23 @@ struct PlaylistSongsResponse {
 #[derive(Deserialize)]
 struct AddSongToPlaylistRequest {
     song_id: String,
+}
+
+#[derive(Deserialize)]
+struct CreateReviewTaskRequest {
+    history_id: String,
+    note: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ReviewTasksResponse {
+    total: usize,
+    tasks: Vec<ReviewTask>,
+}
+
+#[derive(Deserialize)]
+struct ReRecognizeRequest {
+    task_id: String,
 }
 
 fn convert_playlist(p: Playlist) -> PlaylistResponse {
@@ -760,6 +777,364 @@ async fn get_song_playlists(
     }
 }
 
+async fn create_review_task(
+    body: web::Json<CreateReviewTaskRequest>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    let history_id = &body.history_id;
+
+    let history = match database::get_recognition_history_by_id(&pool, history_id).await {
+        Ok(Some(h)) => h,
+        _ => {
+            return HttpResponse::NotFound().json(ErrorResponse {
+                error: "history_not_found".to_string(),
+                message: "Recognition history not found".to_string(),
+            });
+        }
+    };
+
+    if !history.match_found || history.song_id.is_none() {
+        return HttpResponse::BadRequest().json(ErrorResponse {
+            error: "invalid_history".to_string(),
+            message: "Cannot create review task for non-match history".to_string(),
+        });
+    }
+
+    let existing = match database::get_review_task_by_history_id(&pool, history_id).await {
+        Ok(Some(_)) => {
+            return HttpResponse::BadRequest().json(ErrorResponse {
+                error: "task_exists".to_string(),
+                message: "Review task already exists for this history".to_string(),
+            });
+        }
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(ErrorResponse {
+                error: "database_error".to_string(),
+                message: format!("Failed to check existing task: {}", e),
+            });
+        }
+        _ => {}
+    };
+
+    let task_id = Uuid::new_v4().to_string();
+    match database::insert_review_task(
+        &pool,
+        &task_id,
+        history_id,
+        history.song_id.as_deref(),
+        history.song_title.as_deref(),
+        history.song_artist.as_deref(),
+        history.confidence,
+        body.note.as_deref(),
+    ).await {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({
+            "status": "success",
+            "task_id": task_id,
+            "message": "Review task created successfully"
+        })),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to create review task: {}", e),
+        }),
+    }
+}
+
+async fn list_review_tasks(
+    query: web::Query<std::collections::HashMap<String, String>>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    let limit: i32 = query.get("limit")
+        .and_then(|l| l.parse().ok())
+        .unwrap_or(100);
+    let status = query.get("status").map(|s| s.as_str());
+
+    match database::get_review_tasks(&pool, status, limit).await {
+        Ok(tasks) => HttpResponse::Ok().json(ReviewTasksResponse {
+            total: tasks.len(),
+            tasks,
+        }),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch review tasks: {}", e),
+        }),
+    }
+}
+
+async fn get_review_task_detail(
+    task_id: web::Path<String>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    match database::get_review_task_by_id(&pool, &task_id).await {
+        Ok(Some(task)) => HttpResponse::Ok().json(task),
+        Ok(None) => HttpResponse::NotFound().json(ErrorResponse {
+            error: "task_not_found".to_string(),
+            message: "Review task not found".to_string(),
+        }),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch review task: {}", e),
+        }),
+    }
+}
+
+async fn delete_review_task(
+    task_id: web::Path<String>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    match database::delete_review_task(&pool, &task_id).await {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({
+            "status": "success",
+            "message": "Review task deleted successfully"
+        })),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to delete review task: {}", e),
+        }),
+    }
+}
+
+async fn update_review_task_status(
+    task_id: web::Path<String>,
+    body: web::Json<std::collections::HashMap<String, String>>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    let status = match body.get("status") {
+        Some(s) => s.as_str(),
+        None => {
+            return HttpResponse::BadRequest().json(ErrorResponse {
+                error: "missing_status".to_string(),
+                message: "Status is required".to_string(),
+            });
+        }
+    };
+
+    if !["pending", "reviewing", "completed", "rejected"].contains(&status) {
+        return HttpResponse::BadRequest().json(ErrorResponse {
+            error: "invalid_status".to_string(),
+            message: "Invalid status. Must be one of: pending, reviewing, completed, rejected".to_string(),
+        });
+    }
+
+    match database::update_review_task_status(&pool, &task_id, status).await {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({
+            "status": "success",
+            "message": "Review task status updated successfully"
+        })),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to update review task status: {}", e),
+        }),
+    }
+}
+
+async fn re_recognize_review_task(
+    task_id: web::Path<String>,
+    mut payload: Multipart,
+    pool: web::Data<SqlitePool>,
+) -> Result<HttpResponse, Error> {
+    let task = match database::get_review_task_by_id(&pool, &task_id).await {
+        Ok(Some(t)) => t,
+        Ok(None) => {
+            return Ok(HttpResponse::NotFound().json(ErrorResponse {
+                error: "task_not_found".to_string(),
+                message: "Review task not found".to_string(),
+            }));
+        }
+        Err(e) => {
+            return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
+                error: "database_error".to_string(),
+                message: format!("Failed to fetch review task: {}", e),
+            }));
+        }
+    };
+
+    let _ = database::update_review_task_status(&pool, &task_id, "reviewing").await;
+
+    let start = std::time::Instant::now();
+    let mut audio_bytes: Option<Vec<u8>> = None;
+
+    while let Some(item) = payload.next().await {
+        let mut field = item?;
+        let content_disposition = field.content_disposition();
+
+        let name = content_disposition.get_name().unwrap_or("");
+
+        if name == "file" {
+            let mut bytes = web::BytesMut::new();
+            while let Some(chunk) = field.next().await {
+                bytes.extend_from_slice(&chunk?);
+            }
+            audio_bytes = Some(bytes.to_vec());
+        }
+    }
+
+    let audio_bytes = match audio_bytes {
+        Some(b) if !b.is_empty() => b,
+        _ => {
+            let _ = database::update_review_task_status(&pool, &task_id, "pending").await;
+            return Ok(HttpResponse::BadRequest().json(ErrorResponse {
+                error: "missing_file".to_string(),
+                message: "Audio file is required for re-recognition".to_string(),
+            }));
+        }
+    };
+
+    let (input_hash, _, input_peaks, input_robust) = match fingerprint::process_audio_and_generate_fingerprint(&audio_bytes) {
+        Ok(result) => result,
+        Err(e) => {
+            let _ = database::update_review_task_status(&pool, &task_id, "pending").await;
+            return Ok(HttpResponse::BadRequest().json(ErrorResponse {
+                error: "audio_processing_error".to_string(),
+                message: format!("Failed to process audio file: {:?}", e),
+            }));
+        }
+    };
+
+    let songs = match database::get_all_songs(&pool).await {
+        Ok(s) => s,
+        Err(e) => {
+            let _ = database::update_review_task_status(&pool, &task_id, "pending").await;
+            return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
+                error: "database_error".to_string(),
+                message: format!("Failed to fetch songs: {}", e),
+            }));
+        }
+    };
+
+    let mut best_match: Option<(database::Song, f32)> = None;
+
+    for song in songs {
+        let mut max_similarity = 0.0f32;
+
+        if let Some(robust_str) = &song.fingerprint_robust {
+            if let Ok(stored_robust) = serde_json::from_str::<Vec<u64>>(robust_str) {
+                let sim = fingerprint::calculate_robust_similarity(&input_robust, &stored_robust);
+                max_similarity = max_similarity.max(sim * 1.2);
+            }
+        }
+
+        if let Some(peaks_str) = &song.fingerprint_peaks {
+            if let Ok(stored_peaks) = serde_json::from_str::<Vec<(usize, f32)>>(peaks_str) {
+                let sim = fingerprint::calculate_similarity(&input_peaks, &stored_peaks);
+                max_similarity = max_similarity.max(sim);
+            }
+        }
+
+        if max_similarity < 0.05 {
+            let hash_sim = fingerprint::calculate_hash_similarity(&input_hash, &song.fingerprint_hash);
+            max_similarity = max_similarity.max(hash_sim * 0.8);
+        }
+
+        match &best_match {
+            Some((_, best_sim)) if max_similarity > *best_sim => {
+                best_match = Some((song, max_similarity));
+            }
+            None => {
+                best_match = Some((song, max_similarity));
+            }
+            _ => {}
+        }
+    }
+
+    let processing_time_ms = start.elapsed().as_millis() as u64;
+    let confidence_threshold = 0.15;
+
+    let (response, result_str, result_confidence) = match best_match {
+        Some((song, confidence)) if confidence >= confidence_threshold => {
+            let history_id = Uuid::new_v4().to_string();
+            let _ = database::insert_recognition_history(
+                &pool,
+                &history_id,
+                true,
+                Some(&song.id),
+                Some(&song.title),
+                song.artist.as_deref(),
+                confidence.min(1.0),
+                processing_time_ms as i64,
+            ).await;
+
+            let similar_songs = database::get_similar_songs(&pool, &song.id, 5)
+                .await
+                .unwrap_or_default();
+
+            (
+                RecognizeResponse {
+                    match_found: true,
+                    song: Some(SongMatch {
+                        id: song.id.clone(),
+                        title: song.title.clone(),
+                        artist: song.artist.clone(),
+                        duration_sec: song.duration_sec,
+                    }),
+                    confidence: confidence.min(1.0),
+                    processing_time_ms,
+                    similar_songs,
+                },
+                Some(format!("{}|{}", song.id, song.title)),
+                Some(confidence.min(1.0)),
+            )
+        }
+        _ => {
+            let history_id = Uuid::new_v4().to_string();
+            let _ = database::insert_recognition_history(
+                &pool,
+                &history_id,
+                false,
+                None,
+                None,
+                None,
+                0.0,
+                processing_time_ms as i64,
+            ).await;
+
+            (
+                RecognizeResponse {
+                    match_found: false,
+                    song: None,
+                    confidence: 0.0,
+                    processing_time_ms,
+                    similar_songs: Vec::new(),
+                },
+                Some("no_match".to_string()),
+                Some(0.0),
+            )
+        }
+    };
+
+    let _ = database::update_review_task_result(
+        &pool,
+        &task_id,
+        result_str.as_deref(),
+        result_confidence,
+    ).await;
+    let _ = database::update_review_task_status(&pool, &task_id, "completed").await;
+
+    Ok(HttpResponse::Ok().json(response))
+}
+
+async fn get_low_confidence_recognitions(
+    query: web::Query<std::collections::HashMap<String, String>>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    let threshold: f32 = query.get("threshold")
+        .and_then(|t| t.parse().ok())
+        .unwrap_or(0.3);
+    let limit: i32 = query.get("limit")
+        .and_then(|l| l.parse().ok())
+        .unwrap_or(100);
+
+    match database::get_low_confidence_history(&pool, threshold, limit).await {
+        Ok(history) => HttpResponse::Ok().json(serde_json::json!({
+            "total": history.len(),
+            "items": history
+        })),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch low confidence history: {}", e),
+        }),
+    }
+}
+
 async fn upload_song(
     mut payload: Multipart,
     pool: web::Data<SqlitePool>,
@@ -1043,6 +1418,7 @@ async fn main() -> std::io::Result<()> {
     database::init_history_table(&pool).await;
     database::init_failed_samples_table(&pool).await;
     database::init_playlists_tables(&pool).await;
+    database::init_review_tasks_table(&pool).await;
     println!("Database initialized");
 
     HttpServer::new(move || {
@@ -1077,5 +1453,12 @@ async fn main() -> std::io::Result<()> {
             .route("/api/playlists/{id}/songs", web::post().to(add_song_to_playlist))
             .route("/api/playlists/{playlist_id}/songs/{song_id}", web::delete().to(remove_song_from_playlist))
             .route("/api/songs/{id}/playlists", web::get().to(get_song_playlists))
+            .route("/api/review-tasks", web::post().to(create_review_task))
+            .route("/api/review-tasks", web::get().to(list_review_tasks))
+            .route("/api/review-tasks/low-confidence", web::get().to(get_low_confidence_recognitions))
+            .route("/api/review-tasks/{id}", web::get().to(get_review_task_detail))
+            .route("/api/review-tasks/{id}", web::delete().to(delete_review_task))
+            .route("/api/review-tasks/{id}/status", web::put().to(update_review_task_status))
+            .route("/api/review-tasks/{id}/re-recognize", web::post().to(re_recognize_review_task))
     }).bind("127.0.0.1:8080")?.run().await
 }

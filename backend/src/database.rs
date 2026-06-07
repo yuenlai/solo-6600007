@@ -216,6 +216,16 @@ pub async fn get_recognition_history_by_song_id(pool: &SqlitePool, song_id: &str
     Ok(history)
 }
 
+pub async fn get_recognition_history_by_id(pool: &SqlitePool, id: &str) -> Result<Option<RecognitionHistory>, sqlx::Error> {
+    let history = sqlx::query_as::<_, RecognitionHistory>(
+        "SELECT id, match_found, song_id, song_title, song_artist, confidence, processing_time_ms, created_at FROM recognition_history WHERE id = ?"
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(history)
+}
+
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct RankedSong {
     pub song_id: String,
@@ -674,4 +684,184 @@ pub async fn get_song_playlists(
     .fetch_all(pool)
     .await?;
     Ok(playlist_ids.into_iter().map(|(id,)| id).collect())
+}
+
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct ReviewTask {
+    pub id: String,
+    pub history_id: String,
+    pub song_id: Option<String>,
+    pub song_title: Option<String>,
+    pub song_artist: Option<String>,
+    pub original_confidence: f32,
+    pub review_status: String,
+    pub review_count: i64,
+    pub last_review_result: Option<String>,
+    pub last_review_confidence: Option<f32>,
+    pub note: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+pub async fn init_review_tasks_table(pool: &SqlitePool) {
+    sqlx::query(r#"
+        CREATE TABLE IF NOT EXISTS review_tasks (
+            id TEXT PRIMARY KEY,
+            history_id TEXT NOT NULL,
+            song_id TEXT,
+            song_title TEXT,
+            song_artist TEXT,
+            original_confidence REAL NOT NULL,
+            review_status TEXT NOT NULL DEFAULT 'pending',
+            review_count INTEGER NOT NULL DEFAULT 0,
+            last_review_result TEXT,
+            last_review_confidence REAL,
+            note TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        )
+    "#).execute(pool).await.expect("Failed to init review_tasks table");
+
+    sqlx::query(r#"
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_review_tasks_history_id ON review_tasks(history_id)
+    "#).execute(pool).await.ok();
+}
+
+pub async fn insert_review_task(
+    pool: &SqlitePool,
+    id: &str,
+    history_id: &str,
+    song_id: Option<&str>,
+    song_title: Option<&str>,
+    song_artist: Option<&str>,
+    original_confidence: f32,
+    note: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "INSERT OR IGNORE INTO review_tasks (id, history_id, song_id, song_title, song_artist, original_confidence, review_status, review_count, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)"
+    )
+    .bind(id)
+    .bind(history_id)
+    .bind(song_id)
+    .bind(song_title)
+    .bind(song_artist)
+    .bind(original_confidence)
+    .bind(note)
+    .bind(now.clone())
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_review_tasks(
+    pool: &SqlitePool,
+    status: Option<&str>,
+    limit: i32,
+) -> Result<Vec<ReviewTask>, sqlx::Error> {
+    let tasks = match status {
+        Some(s) => sqlx::query_as::<_, ReviewTask>(
+            "SELECT * FROM review_tasks WHERE review_status = ? ORDER BY created_at DESC LIMIT ?"
+        )
+        .bind(s)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?,
+        None => sqlx::query_as::<_, ReviewTask>(
+            "SELECT * FROM review_tasks ORDER BY created_at DESC LIMIT ?"
+        )
+        .bind(limit)
+        .fetch_all(pool)
+        .await?,
+    };
+    Ok(tasks)
+}
+
+pub async fn get_review_task_by_id(
+    pool: &SqlitePool,
+    id: &str,
+) -> Result<Option<ReviewTask>, sqlx::Error> {
+    let task = sqlx::query_as::<_, ReviewTask>(
+        "SELECT * FROM review_tasks WHERE id = ?"
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(task)
+}
+
+pub async fn get_review_task_by_history_id(
+    pool: &SqlitePool,
+    history_id: &str,
+) -> Result<Option<ReviewTask>, sqlx::Error> {
+    let task = sqlx::query_as::<_, ReviewTask>(
+        "SELECT * FROM review_tasks WHERE history_id = ?"
+    )
+    .bind(history_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(task)
+}
+
+pub async fn update_review_task_status(
+    pool: &SqlitePool,
+    id: &str,
+    status: &str,
+) -> Result<(), sqlx::Error> {
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "UPDATE review_tasks SET review_status = ?, updated_at = ? WHERE id = ?"
+    )
+    .bind(status)
+    .bind(now)
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn update_review_task_result(
+    pool: &SqlitePool,
+    id: &str,
+    result: Option<&str>,
+    confidence: Option<f32>,
+) -> Result<(), sqlx::Error> {
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "UPDATE review_tasks SET review_count = review_count + 1, last_review_result = ?, last_review_confidence = ?, updated_at = ? WHERE id = ?"
+    )
+    .bind(result)
+    .bind(confidence)
+    .bind(now)
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn delete_review_task(
+    pool: &SqlitePool,
+    id: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM review_tasks WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn get_low_confidence_history(
+    pool: &SqlitePool,
+    threshold: f32,
+    limit: i32,
+) -> Result<Vec<RecognitionHistory>, sqlx::Error> {
+    let history = sqlx::query_as::<_, RecognitionHistory>(
+        "SELECT * FROM recognition_history WHERE match_found = 1 AND confidence < ? ORDER BY confidence ASC, created_at DESC LIMIT ?"
+    )
+    .bind(threshold)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(history)
 }

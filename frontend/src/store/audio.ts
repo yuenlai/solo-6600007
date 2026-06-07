@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import axios from 'axios';
-import { Song, RecognizeResult, UploadSongResponse, RecognitionHistoryItem, BatchUploadProgress, BatchUploadResult, DeleteSongResponse, FailedSample, FailedSamplesResponse, PromoteSampleRequest, PromoteSampleResponse, SimilarSong, SimilarSongsResponse, CalibrationResult, CalibrationStatus, QualityLevel, CompareItem, CompareSlot, CompareResult, Playlist, PlaylistsResponse, PlaylistSongsResponse, PlaylistSongDetail, CreatePlaylistRequest, UpdatePlaylistRequest, AddSongToPlaylistRequest, SongPlaylistsResponse, OfflineRecognitionDraft, OfflineDraftStatus } from '../types';
+import { Song, RecognizeResult, UploadSongResponse, RecognitionHistoryItem, BatchUploadProgress, BatchUploadResult, DeleteSongResponse, FailedSample, FailedSamplesResponse, PromoteSampleRequest, PromoteSampleResponse, SimilarSong, SimilarSongsResponse, CalibrationResult, CalibrationStatus, QualityLevel, CompareItem, CompareSlot, CompareResult, Playlist, PlaylistsResponse, PlaylistSongsResponse, PlaylistSongDetail, CreatePlaylistRequest, UpdatePlaylistRequest, AddSongToPlaylistRequest, SongPlaylistsResponse, OfflineRecognitionDraft, OfflineDraftStatus, ReviewTask, ReviewTasksResponse, CreateReviewTaskRequest, LowConfidenceHistoryResponse } from '../types';
 
 const API_BASE = 'http://127.0.0.1:8080/api';
 
@@ -116,6 +116,20 @@ interface AudioState {
   clearSyncedDrafts: () => void;
   syncOfflineDrafts: () => Promise<{ success: number; failed: number }>;
   syncSingleDraft: (id: string) => Promise<boolean>;
+  reviewTasks: ReviewTask[];
+  isFetchingReviewTasks: boolean;
+  isCreatingReviewTask: boolean;
+  isReRecognizing: boolean;
+  isDeletingReviewTask: boolean;
+  reviewTasksError: string | null;
+  lowConfidenceHistory: RecognitionHistoryItem[];
+  isFetchingLowConfidence: boolean;
+  fetchReviewTasks: (status?: string) => Promise<void>;
+  createReviewTask: (historyId: string, note?: string | null) => Promise<boolean>;
+  deleteReviewTask: (taskId: string) => Promise<boolean>;
+  reRecognizeReviewTask: (taskId: string, file: File) => Promise<boolean>;
+  updateReviewTaskStatus: (taskId: string, status: string) => Promise<boolean>;
+  fetchLowConfidenceHistory: (threshold?: number) => Promise<void>;
 }
 
 export const useAudioStore = create<AudioState>((set) => ({
@@ -1040,5 +1054,100 @@ export const useAudioStore = create<AudioState>((set) => ({
   completeOnboarding: () => {
     localStorage.setItem(ONBOARDING_KEY, 'true');
     set({ isOnboardingCompleted: true });
+  },
+
+  reviewTasks: [],
+  isFetchingReviewTasks: false,
+  isCreatingReviewTask: false,
+  isReRecognizing: false,
+  isDeletingReviewTask: false,
+  reviewTasksError: null,
+  lowConfidenceHistory: [],
+  isFetchingLowConfidence: false,
+
+  fetchReviewTasks: async (status?: string) => {
+    set({ isFetchingReviewTasks: true, reviewTasksError: null });
+    try {
+      const url = status
+        ? `${API_BASE}/review-tasks?status=${status}&limit=100`
+        : `${API_BASE}/review-tasks?limit=100`;
+      const response = await axios.get<ReviewTasksResponse>(url);
+      set({ reviewTasks: response.data.tasks, isFetchingReviewTasks: false });
+    } catch (error: any) {
+      const message = error.response?.data?.message || error.message || 'Failed to fetch review tasks';
+      set({ isFetchingReviewTasks: false, reviewTasksError: message });
+    }
+  },
+
+  createReviewTask: async (historyId: string, note?: string | null) => {
+    set({ isCreatingReviewTask: true, reviewTasksError: null });
+    try {
+      const body: CreateReviewTaskRequest = { history_id: historyId, note: note || null };
+      await axios.post(`${API_BASE}/review-tasks`, body);
+      set({ isCreatingReviewTask: false });
+      return true;
+    } catch (error: any) {
+      const message = error.response?.data?.message || error.message || 'Failed to create review task';
+      set({ isCreatingReviewTask: false, reviewTasksError: message });
+      return false;
+    }
+  },
+
+  deleteReviewTask: async (taskId: string) => {
+    set({ isDeletingReviewTask: true });
+    try {
+      await axios.delete(`${API_BASE}/review-tasks/${taskId}`);
+      set((state) => ({
+        reviewTasks: state.reviewTasks.filter((t) => t.id !== taskId),
+        isDeletingReviewTask: false,
+      }));
+      return true;
+    } catch (error: any) {
+      const message = error.response?.data?.message || error.message || 'Failed to delete review task';
+      set({ isDeletingReviewTask: false, reviewTasksError: message });
+      return false;
+    }
+  },
+
+  reRecognizeReviewTask: async (taskId: string, file: File) => {
+    set({ isReRecognizing: true, reviewTasksError: null });
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const response = await axios.post<RecognizeResult>(
+        `${API_BASE}/review-tasks/${taskId}/re-recognize`,
+        formData,
+        { headers: { 'Content-Type': 'multipart/form-data' } }
+      );
+      set({ isReRecognizing: false });
+      return true;
+    } catch (error: any) {
+      const message = error.response?.data?.message || error.message || 'Re-recognition failed';
+      set({ isReRecognizing: false, reviewTasksError: message });
+      return false;
+    }
+  },
+
+  updateReviewTaskStatus: async (taskId: string, status: string) => {
+    try {
+      await axios.put(`${API_BASE}/review-tasks/${taskId}/status`, { status });
+      return true;
+    } catch (error: any) {
+      console.error('Failed to update review task status:', error);
+      return false;
+    }
+  },
+
+  fetchLowConfidenceHistory: async (threshold: number = 0.3) => {
+    set({ isFetchingLowConfidence: true });
+    try {
+      const response = await axios.get<LowConfidenceHistoryResponse>(
+        `${API_BASE}/review-tasks/low-confidence?threshold=${threshold}&limit=100`
+      );
+      set({ lowConfidenceHistory: response.data.items, isFetchingLowConfidence: false });
+    } catch (error) {
+      console.error('Failed to fetch low confidence history:', error);
+      set({ isFetchingLowConfidence: false });
+    }
   },
 }));

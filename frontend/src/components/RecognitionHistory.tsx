@@ -1,13 +1,29 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { RecognitionHistoryItem } from '../types';
 import { useAudioStore } from '../store/audio';
 
 export const RecognitionHistory: React.FC = () => {
-  const { history, fetchHistory, isFetchingHistory } = useAudioStore();
+  const { history, fetchHistory, isFetchingHistory, createReviewTask, isCreatingReviewTask } = useAudioStore();
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   useEffect(() => {
     fetchHistory();
   }, [fetchHistory]);
+
+  useEffect(() => {
+    if (successMessage) {
+      const timer = setTimeout(() => setSuccessMessage(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [successMessage]);
+
+  const handleAddToReview = async (item: RecognitionHistoryItem) => {
+    if (!item.match_found || !item.song_id) return;
+    const success = await createReviewTask(item.id);
+    if (success) {
+      setSuccessMessage('已成功加入复检列表');
+    }
+  };
 
   const formatTime = (dateStr: string) => {
     const date = new Date(dateStr);
@@ -116,10 +132,33 @@ export const RecognitionHistory: React.FC = () => {
                   )}
                 </div>
               </div>
-              <div style={{ display: 'flex', gap: '16px', fontSize: '12px', color: '#999', marginLeft: '42px' }}>
-                <span>⏱️ {item.processing_time_ms}ms</span>
-                {item.match_found && <span>🎯 置信度 {(item.confidence * 100).toFixed(0)}%</span>}
-                <span>🕐 {formatTime(item.created_at)}</span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginLeft: '42px' }}>
+                <div style={{ display: 'flex', gap: '16px', fontSize: '12px', color: '#999' }}>
+                  <span>⏱️ {item.processing_time_ms}ms</span>
+                  {item.match_found && <span style={{ color: item.confidence < 0.3 ? '#ff9800' : '#999', fontWeight: item.confidence < 0.3 ? 500 : 400 }}>
+                    🎯 置信度 {(item.confidence * 100).toFixed(0)}%
+                    {item.confidence < 0.3 && ' ⚠️'}
+                  </span>}
+                  <span>🕐 {formatTime(item.created_at)}</span>
+                </div>
+                {item.match_found && item.song_id && (
+                  <button
+                    onClick={() => handleAddToReview(item)}
+                    disabled={isCreatingReviewTask}
+                    style={{
+                      padding: '4px 10px',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: isCreatingReviewTask ? 'not-allowed' : 'pointer',
+                      fontSize: '11px',
+                      background: item.confidence < 0.3 ? '#ff9800' : '#e0e0e0',
+                      color: item.confidence < 0.3 ? '#fff' : '#666',
+                      fontWeight: 500,
+                    }}
+                  >
+                    🔍 加入复检
+                  </button>
+                )}
               </div>
             </div>
           ))}

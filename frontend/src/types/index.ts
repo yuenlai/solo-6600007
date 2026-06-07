@@ -210,3 +210,36 @@ export interface OfflineDraftsResponse {
   total: number;
   drafts: OfflineRecognitionDraft[];
 }
+
+export type ReviewStatus = 'pending' | 'reviewing' | 'completed' | 'rejected';
+
+export interface ReviewTask {
+  id: string;
+  history_id: string;
+  song_id: string | null;
+  song_title: string | null;
+  song_artist: string | null;
+  original_confidence: number;
+  review_status: ReviewStatus;
+  review_count: number;
+  last_review_result: string | null;
+  last_review_confidence: number | null;
+  note: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ReviewTasksResponse {
+  total: number;
+  tasks: ReviewTask[];
+}
+
+export interface CreateReviewTaskRequest {
+  history_id: string;
+  note?: string | null;
+}
+
+export interface LowConfidenceHistoryResponse {
+  total: number;
+  items: RecognitionHistoryItem[];
+}

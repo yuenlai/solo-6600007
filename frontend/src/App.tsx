@@ -10,10 +10,11 @@ import { PlaylistManager } from './components/PlaylistManager';
 import { AddToPlaylist } from './components/AddToPlaylist';
 import { OnboardingGuide } from './components/OnboardingGuide';
 import { OfflineDrafts } from './components/OfflineDrafts';
+import { ReviewTasks } from './components/ReviewTasks';
 import { useAudioStore } from './store/audio';
 
 const App: React.FC = () => {
-  const [tab, setTab] = useState<'recognize' | 'compare' | 'library' | 'queue' | 'history' | 'failed' | 'playlists' | 'drafts'>('recognize');
+  const [tab, setTab] = useState<'recognize' | 'compare' | 'library' | 'queue' | 'history' | 'failed' | 'playlists' | 'drafts' | 'review'>('recognize');
   const { 
     recognizeResult, 
     currentSongId, 
@@ -106,6 +107,7 @@ const App: React.FC = () => {
           { key: 'failed', label: `🗑️ 失败样本${failedCount > 0 ? ` (${failedCount})` : ''}` },
           { key: 'drafts', label: `📝 离线草稿${draftsCount > 0 ? ` (${draftsCount})` : ''}` },
           { key: 'history', label: '📋 历史', onboarding: 'history' },
+          { key: 'review', label: '🔍 结果复检' },
         ].map(t => (
           <button
             key={t.key}
@@ -227,6 +229,7 @@ const App: React.FC = () => {
             {tab === 'failed' && <FailedSamples />}
             {tab === 'drafts' && <OfflineDrafts />}
             {tab === 'history' && <RecognitionHistory />}
+            {tab === 'review' && <ReviewTasks />}
           </>
         )}
       </main>
