@@ -11,7 +11,7 @@ use std::fmt;
 mod fingerprint;
 mod database;
 
-use database::{Song, RecognitionHistory, RankedSong, TrendingSong, get_pending_songs};
+use database::{Song, RecognitionHistory, RankedSong, TrendingSong, FailedSample, get_pending_songs};
 
 #[derive(Serialize)]
 struct HealthResponse { status: String, service: String }
@@ -81,6 +81,25 @@ struct TrendingSongsResponse {
     total: usize,
     days: i32,
     songs: Vec<TrendingSong>,
+}
+
+#[derive(Serialize)]
+struct FailedSamplesResponse {
+    total: usize,
+    samples: Vec<FailedSample>,
+}
+
+#[derive(Deserialize)]
+struct PromoteSampleRequest {
+    title: String,
+    artist: Option<String>,
+}
+
+#[derive(Serialize)]
+struct PromoteSampleResponse {
+    status: String,
+    song_id: String,
+    message: String,
 }
 
 async fn health() -> HttpResponse {
@@ -216,6 +235,22 @@ async fn recognize_audio(
                 None,
                 0.0,
                 processing_time_ms as i64,
+            ).await;
+
+            let sample_id = Uuid::new_v4().to_string();
+            let peaks_json = serde_json::to_string(&input_peaks).ok();
+            let robust_json = serde_json::to_string(&input_robust).ok();
+            let best_confidence = best_match.as_ref().map(|(_, c)| *c).unwrap_or(0.0);
+            
+            let _ = database::insert_failed_sample(
+                &pool,
+                &sample_id,
+                Some(&audio_bytes),
+                &input_hash,
+                peaks_json.as_deref(),
+                robust_json.as_deref(),
+                None,
+                best_confidence,
             ).await;
 
             RecognizeResponse {
@@ -368,6 +403,111 @@ async fn delete_song(
         Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
             error: "database_error".to_string(),
             message: format!("Failed to delete song: {}", e),
+        }),
+    }
+}
+
+async fn list_failed_samples(
+    query: web::Query<std::collections::HashMap<String, String>>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    let limit: i32 = query.get("limit")
+        .and_then(|l| l.parse().ok())
+        .unwrap_or(100);
+
+    match database::get_failed_samples(&pool, limit).await {
+        Ok(samples) => HttpResponse::Ok().json(FailedSamplesResponse {
+            total: samples.len(),
+            samples,
+        }),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch failed samples: {}", e),
+        }),
+    }
+}
+
+async fn get_failed_sample_preview(
+    sample_id: web::Path<String>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    match database::get_failed_sample_audio(&pool, &sample_id).await {
+        Ok(Some(sample)) => {
+            HttpResponse::Ok()
+                .content_type("audio/wav")
+                .append_header(("Content-Disposition", format!("inline; filename=\"failed_sample_{}.wav\"", sample_id)))
+                .body(sample)
+        }
+        Ok(None) => HttpResponse::NotFound().json(ErrorResponse {
+            error: "sample_not_found".to_string(),
+            message: "Failed sample audio not found".to_string(),
+        }),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch sample audio: {}", e),
+        }),
+    }
+}
+
+async fn delete_failed_sample(
+    sample_id: web::Path<String>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    match database::delete_failed_sample(&pool, &sample_id).await {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({
+            "status": "success",
+            "message": "Failed sample deleted successfully"
+        })),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to delete sample: {}", e),
+        }),
+    }
+}
+
+async fn promote_failed_sample(
+    sample_id: web::Path<String>,
+    body: web::Json<PromoteSampleRequest>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    let sample = match database::get_failed_sample_by_id(&pool, &sample_id).await {
+        Ok(Some(s)) => s,
+        Ok(None) => return HttpResponse::NotFound().json(ErrorResponse {
+            error: "sample_not_found".to_string(),
+            message: "Failed sample not found".to_string(),
+        }),
+        Err(e) => return HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch sample: {}", e),
+        }),
+    };
+
+    let song_id = Uuid::new_v4().to_string();
+    let audio_sample = sample.audio_data.as_deref();
+
+    match database::insert_song(
+        &pool,
+        &song_id,
+        &body.title,
+        body.artist.as_deref(),
+        &sample.fingerprint_hash,
+        sample.fingerprint_peaks.as_deref(),
+        sample.fingerprint_robust.as_deref(),
+        sample.duration_sec,
+        audio_sample,
+        Some("completed"),
+    ).await {
+        Ok(_) => {
+            let _ = database::delete_failed_sample(&pool, &sample_id).await;
+            HttpResponse::Ok().json(PromoteSampleResponse {
+                status: "success".to_string(),
+                song_id: song_id.clone(),
+                message: "Sample promoted to song successfully".to_string(),
+            })
+        }
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to promote sample: {}", e),
         }),
     }
 }
@@ -653,6 +793,7 @@ async fn main() -> std::io::Result<()> {
     let pool = database::create_pool().await;
     database::init_db(&pool).await;
     database::init_history_table(&pool).await;
+    database::init_failed_samples_table(&pool).await;
     println!("Database initialized");
 
     HttpServer::new(move || {
@@ -673,5 +814,9 @@ async fn main() -> std::io::Result<()> {
             .route("/api/history", web::get().to(get_history))
             .route("/api/rankings/top", web::get().to(get_top_songs))
             .route("/api/rankings/trending", web::get().to(get_trending_songs))
+            .route("/api/failed-samples", web::get().to(list_failed_samples))
+            .route("/api/failed-samples/{id}/preview", web::get().to(get_failed_sample_preview))
+            .route("/api/failed-samples/{id}", web::delete().to(delete_failed_sample))
+            .route("/api/failed-samples/{id}/promote", web::post().to(promote_failed_sample))
     }).bind("127.0.0.1:8080")?.run().await
 }

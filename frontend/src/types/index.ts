@@ -66,3 +66,30 @@ export interface DeleteSongResponse {
   status: string;
   message: string;
 }
+
+export interface FailedSample {
+  id: string;
+  fingerprint_hash: string;
+  fingerprint_peaks?: string | null;
+  fingerprint_robust?: string | null;
+  duration_sec: number | null;
+  best_confidence: number;
+  note?: string | null;
+  created_at: string;
+}
+
+export interface FailedSamplesResponse {
+  total: number;
+  samples: FailedSample[];
+}
+
+export interface PromoteSampleRequest {
+  title: string;
+  artist?: string | null;
+}
+
+export interface PromoteSampleResponse {
+  status: string;
+  song_id: string;
+  message: string;
+}

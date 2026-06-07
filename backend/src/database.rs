@@ -312,3 +312,97 @@ pub async fn get_trending_songs(pool: &SqlitePool, limit: i32, days: i32) -> Res
     .await?;
     Ok(songs)
 }
+
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct FailedSample {
+    pub id: String,
+    pub audio_data: Option<Vec<u8>>,
+    pub fingerprint_hash: String,
+    pub fingerprint_peaks: Option<String>,
+    pub fingerprint_robust: Option<String>,
+    pub duration_sec: Option<i64>,
+    pub best_confidence: f32,
+    pub note: Option<String>,
+    pub created_at: String,
+}
+
+pub async fn init_failed_samples_table(pool: &SqlitePool) {
+    sqlx::query(r#"
+        CREATE TABLE IF NOT EXISTS failed_samples (
+            id TEXT PRIMARY KEY,
+            audio_data BLOB,
+            fingerprint_hash TEXT NOT NULL,
+            fingerprint_peaks TEXT,
+            fingerprint_robust TEXT,
+            duration_sec INTEGER,
+            best_confidence REAL NOT NULL DEFAULT 0,
+            note TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        )
+    "#).execute(pool).await.expect("Failed to init failed_samples table");
+}
+
+pub async fn insert_failed_sample(
+    pool: &SqlitePool,
+    id: &str,
+    audio_data: Option<&[u8]>,
+    fingerprint_hash: &str,
+    fingerprint_peaks: Option<&str>,
+    fingerprint_robust: Option<&str>,
+    duration_sec: Option<i64>,
+    best_confidence: f32,
+) -> Result<(), sqlx::Error> {
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "INSERT INTO failed_samples (id, audio_data, fingerprint_hash, fingerprint_peaks, fingerprint_robust, duration_sec, best_confidence, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+    .bind(id)
+    .bind(audio_data)
+    .bind(fingerprint_hash)
+    .bind(fingerprint_peaks)
+    .bind(fingerprint_robust)
+    .bind(duration_sec)
+    .bind(best_confidence)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_failed_samples(pool: &SqlitePool, limit: i32) -> Result<Vec<FailedSample>, sqlx::Error> {
+    let samples = sqlx::query_as::<_, FailedSample>(
+        "SELECT id, fingerprint_hash, fingerprint_peaks, fingerprint_robust, duration_sec, best_confidence, note, created_at FROM failed_samples ORDER BY created_at DESC LIMIT ?"
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(samples)
+}
+
+pub async fn get_failed_sample_audio(pool: &SqlitePool, id: &str) -> Result<Option<Vec<u8>>, sqlx::Error> {
+    let sample: Option<(Vec<u8>,)> = sqlx::query_as(
+        "SELECT audio_data FROM failed_samples WHERE id = ? AND audio_data IS NOT NULL"
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(sample.map(|s| s.0))
+}
+
+pub async fn delete_failed_sample(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM failed_samples WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn get_failed_sample_by_id(pool: &SqlitePool, id: &str) -> Result<Option<FailedSample>, sqlx::Error> {
+    let sample = sqlx::query_as::<_, FailedSample>(
+        "SELECT id, audio_data, fingerprint_hash, fingerprint_peaks, fingerprint_robust, duration_sec, best_confidence, note, created_at FROM failed_samples WHERE id = ?"
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(sample)
+}

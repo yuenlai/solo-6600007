@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import axios from 'axios';
-import { Song, RecognizeResult, UploadSongResponse, RecognitionHistoryItem, BatchUploadProgress, BatchUploadResult, DeleteSongResponse } from '../types';
+import { Song, RecognizeResult, UploadSongResponse, RecognitionHistoryItem, BatchUploadProgress, BatchUploadResult, DeleteSongResponse, FailedSample, FailedSamplesResponse, PromoteSampleRequest, PromoteSampleResponse } from '../types';
 
 const API_BASE = 'http://127.0.0.1:8080/api';
 
@@ -29,6 +29,12 @@ interface AudioState {
   batchUploadError: string | null;
   isDeletingSong: boolean;
   deleteSongError: string | null;
+  failedSamples: FailedSample[];
+  isFetchingFailedSamples: boolean;
+  isPromotingSample: boolean;
+  isDeletingFailedSample: boolean;
+  failedSamplesError: string | null;
+  promoteSampleError: string | null;
   fetchSongs: () => Promise<void>;
   fetchPendingSongs: () => Promise<void>;
   uploadSong: (title: string, artist: string, file: File) => Promise<boolean>;
@@ -47,6 +53,9 @@ interface AudioState {
   clearRecognizeStatus: () => void;
   clearBatchUploadStatus: () => void;
   clearDeleteStatus: () => void;
+  fetchFailedSamples: () => Promise<void>;
+  deleteFailedSample: (sampleId: string) => Promise<boolean>;
+  promoteFailedSample: (sampleId: string, title: string, artist?: string | null) => Promise<boolean>;
 }
 
 export const useAudioStore = create<AudioState>((set) => ({
@@ -74,6 +83,12 @@ export const useAudioStore = create<AudioState>((set) => ({
   batchUploadError: null,
   isDeletingSong: false,
   deleteSongError: null,
+  failedSamples: [],
+  isFetchingFailedSamples: false,
+  isPromotingSample: false,
+  isDeletingFailedSample: false,
+  failedSamplesError: null,
+  promoteSampleError: null,
 
   fetchSongs: async () => {
     try {
@@ -252,4 +267,48 @@ export const useAudioStore = create<AudioState>((set) => ({
   },
 
   clearDeleteStatus: () => set({ deleteSongError: null }),
+
+  fetchFailedSamples: async () => {
+    set({ isFetchingFailedSamples: true, failedSamplesError: null });
+    try {
+      const response = await axios.get<FailedSamplesResponse>(`${API_BASE}/failed-samples?limit=100`);
+      set({ failedSamples: response.data.samples, isFetchingFailedSamples: false });
+    } catch (error: any) {
+      const message = error.response?.data?.message || error.message || 'Failed to fetch failed samples';
+      set({ isFetchingFailedSamples: false, failedSamplesError: message });
+    }
+  },
+
+  deleteFailedSample: async (sampleId: string) => {
+    set({ isDeletingFailedSample: true });
+    try {
+      await axios.delete(`${API_BASE}/failed-samples/${sampleId}`);
+      set((state) => ({
+        failedSamples: state.failedSamples.filter((s) => s.id !== sampleId),
+        isDeletingFailedSample: false,
+      }));
+      return true;
+    } catch (error: any) {
+      const message = error.response?.data?.message || error.message || 'Delete failed';
+      set({ isDeletingFailedSample: false, failedSamplesError: message });
+      return false;
+    }
+  },
+
+  promoteFailedSample: async (sampleId: string, title: string, artist?: string | null) => {
+    set({ isPromotingSample: true, promoteSampleError: null });
+    try {
+      const body: PromoteSampleRequest = { title, artist: artist || null };
+      await axios.post<PromoteSampleResponse>(`${API_BASE}/failed-samples/${sampleId}/promote`, body);
+      set((state) => ({
+        failedSamples: state.failedSamples.filter((s) => s.id !== sampleId),
+        isPromotingSample: false,
+      }));
+      return true;
+    } catch (error: any) {
+      const message = error.response?.data?.message || error.message || 'Promote failed';
+      set({ isPromotingSample: false, promoteSampleError: message });
+      return false;
+    }
+  },
 }));

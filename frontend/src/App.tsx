@@ -4,13 +4,15 @@ import { SongLibrary } from './components/SongLibrary';
 import { RecognitionHistory } from './components/RecognitionHistory';
 import { SongDetail } from './components/SongDetail';
 import { PendingQueue } from './components/PendingQueue';
+import { FailedSamples } from './components/FailedSamples';
 import { useAudioStore } from './store/audio';
 
 const App: React.FC = () => {
-  const [tab, setTab] = useState<'recognize' | 'library' | 'queue' | 'history'>('recognize');
-  const { recognizeResult, currentSongId, setCurrentSongId, pendingSongs } = useAudioStore();
+  const [tab, setTab] = useState<'recognize' | 'library' | 'queue' | 'history' | 'failed'>('recognize');
+  const { recognizeResult, currentSongId, setCurrentSongId, pendingSongs, failedSamples } = useAudioStore();
 
   const pendingCount = pendingSongs.length;
+  const failedCount = failedSamples.length;
 
   return (
     <div style={{ display: 'flex', height: '100vh', fontFamily: 'sans-serif' }}>
@@ -20,6 +22,7 @@ const App: React.FC = () => {
           { key: 'recognize', label: '🎤 识别' },
           { key: 'library', label: '📚 指纹库' },
           { key: 'queue', label: `⏳ 待处理${pendingCount > 0 ? ` (${pendingCount})` : ''}` },
+          { key: 'failed', label: `🗑️ 失败样本${failedCount > 0 ? ` (${failedCount})` : ''}` },
           { key: 'history', label: '📋 历史' },
         ].map(t => (
           <button
@@ -71,6 +74,7 @@ const App: React.FC = () => {
             )}
             {tab === 'library' && <SongLibrary />}
             {tab === 'queue' && <PendingQueue />}
+            {tab === 'failed' && <FailedSamples />}
             {tab === 'history' && <RecognitionHistory />}
           </>
         )}
