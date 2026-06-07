@@ -11,7 +11,7 @@ use std::fmt;
 mod fingerprint;
 mod database;
 
-use database::{Song, RecognitionHistory};
+use database::{Song, RecognitionHistory, RankedSong, TrendingSong};
 
 #[derive(Serialize)]
 struct HealthResponse { status: String, service: String }
@@ -19,7 +19,7 @@ struct HealthResponse { status: String, service: String }
 #[derive(Serialize, Deserialize)]
 struct RecognizeRequest { audio_hash: String }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct UploadResponse {
     id: String,
     title: String,
@@ -68,6 +68,19 @@ struct BatchUploadResult {
     success: usize,
     failed: usize,
     results: Vec<BatchUploadProgress>,
+}
+
+#[derive(Serialize)]
+struct TopSongsResponse {
+    total: usize,
+    songs: Vec<RankedSong>,
+}
+
+#[derive(Serialize)]
+struct TrendingSongsResponse {
+    total: usize,
+    days: i32,
+    songs: Vec<TrendingSong>,
 }
 
 async fn health() -> HttpResponse {
@@ -267,6 +280,50 @@ async fn get_song_history(
     }
 }
 
+async fn get_top_songs(
+    query: web::Query<std::collections::HashMap<String, String>>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    let limit: i32 = query.get("limit")
+        .and_then(|l| l.parse().ok())
+        .unwrap_or(20);
+
+    match database::get_top_songs(&pool, limit).await {
+        Ok(songs) => HttpResponse::Ok().json(TopSongsResponse {
+            total: songs.len(),
+            songs,
+        }),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch top songs: {}", e),
+        }),
+    }
+}
+
+async fn get_trending_songs(
+    query: web::Query<std::collections::HashMap<String, String>>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    let limit: i32 = query.get("limit")
+        .and_then(|l| l.parse().ok())
+        .unwrap_or(20);
+    let days: i32 = query.get("days")
+        .and_then(|d| d.parse().ok())
+        .unwrap_or(7);
+
+    match database::get_trending_songs(&pool, limit, days).await {
+        Ok(songs) => HttpResponse::Ok().json(TrendingSongsResponse {
+            total: songs.len(),
+            days,
+            songs,
+        }),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch trending songs: {}", e),
+        }),
+    }
+}
+
 async fn get_song_preview(
     song_id: web::Path<String>,
     pool: web::Data<SqlitePool>,
@@ -436,7 +493,7 @@ async fn batch_upload_songs(
         let name = content_disposition.get_name().unwrap_or("");
 
         if name.starts_with("file_") {
-            let file_name = content_disposition.get_file_name().unwrap_or("unknown.wav").to_string();
+            let file_name = content_disposition.get_filename().unwrap_or("unknown.wav").to_string();
             let mut bytes = web::BytesMut::new();
             while let Some(chunk) = field.next().await {
                 bytes.extend_from_slice(&chunk?);
@@ -601,5 +658,7 @@ async fn main() -> std::io::Result<()> {
             .route("/api/songs/{id}/preview", web::get().to(get_song_preview))
             .route("/api/songs/{id}", web::delete().to(delete_song))
             .route("/api/history", web::get().to(get_history))
+            .route("/api/rankings/top", web::get().to(get_top_songs))
+            .route("/api/rankings/trending", web::get().to(get_trending_songs))
     }).bind("127.0.0.1:8080")?.run().await
 }

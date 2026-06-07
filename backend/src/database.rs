@@ -187,3 +187,100 @@ pub async fn get_recognition_history_by_song_id(pool: &SqlitePool, song_id: &str
     .await?;
     Ok(history)
 }
+
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct RankedSong {
+    pub song_id: String,
+    pub song_title: String,
+    pub song_artist: Option<String>,
+    pub recognition_count: i64,
+    pub rank: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct TrendingSong {
+    pub song_id: String,
+    pub song_title: String,
+    pub song_artist: Option<String>,
+    pub recent_count: i64,
+    pub previous_count: i64,
+    pub trend_score: f64,
+    pub rank: i64,
+}
+
+pub async fn get_top_songs(pool: &SqlitePool, limit: i32) -> Result<Vec<RankedSong>, sqlx::Error> {
+    let songs = sqlx::query_as::<_, RankedSong>(r#"
+        SELECT 
+            song_id,
+            song_title,
+            song_artist,
+            COUNT(*) as recognition_count,
+            ROW_NUMBER() OVER (ORDER BY COUNT(*) DESC) as rank
+        FROM recognition_history
+        WHERE match_found = 1 AND song_id IS NOT NULL
+        GROUP BY song_id, song_title, song_artist
+        ORDER BY recognition_count DESC
+        LIMIT ?
+    "#)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(songs)
+}
+
+pub async fn get_trending_songs(pool: &SqlitePool, limit: i32, days: i32) -> Result<Vec<TrendingSong>, sqlx::Error> {
+    let songs = sqlx::query_as::<_, TrendingSong>(r#"
+        WITH recent AS (
+            SELECT 
+                song_id,
+                song_title,
+                song_artist,
+                COUNT(*) as recent_count
+            FROM recognition_history
+            WHERE match_found = 1 
+                AND song_id IS NOT NULL
+                AND datetime(created_at) >= datetime('now', '-' || ? || ' days')
+            GROUP BY song_id, song_title, song_artist
+        ),
+        previous AS (
+            SELECT 
+                song_id,
+                COUNT(*) as previous_count
+            FROM recognition_history
+            WHERE match_found = 1 
+                AND song_id IS NOT NULL
+                AND datetime(created_at) >= datetime('now', '-' || (? * 2) || ' days')
+                AND datetime(created_at) < datetime('now', '-' || ? || ' days')
+            GROUP BY song_id
+        )
+        SELECT 
+            r.song_id,
+            r.song_title,
+            r.song_artist,
+            r.recent_count,
+            COALESCE(p.previous_count, 0) as previous_count,
+            CASE 
+                WHEN COALESCE(p.previous_count, 0) = 0 THEN r.recent_count * 2.0
+                ELSE (r.recent_count - p.previous_count) * 1.0 / p.previous_count + r.recent_count * 0.1
+            END as trend_score,
+            ROW_NUMBER() OVER (
+                ORDER BY 
+                    CASE 
+                        WHEN COALESCE(p.previous_count, 0) = 0 THEN r.recent_count * 2.0
+                        ELSE (r.recent_count - p.previous_count) * 1.0 / p.previous_count + r.recent_count * 0.1
+                    END DESC,
+                    r.recent_count DESC
+            ) as rank
+        FROM recent r
+        LEFT JOIN previous p ON r.song_id = p.song_id
+        ORDER BY trend_score DESC, recent_count DESC
+        LIMIT ?
+    "#)
+    .bind(days)
+    .bind(days)
+    .bind(days)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(songs)
+}
