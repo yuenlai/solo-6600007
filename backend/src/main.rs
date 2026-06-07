@@ -11,7 +11,7 @@ use std::fmt;
 mod fingerprint;
 mod database;
 
-use database::{Song, RankedSong, TrendingSong, FailedSample, SimilarSong, Playlist, PlaylistSongDetail, ReviewTask, Tag, PracticeRecord, PracticeSummary, ArtistSummary, ArtistSong, ArtistRecentActivity, get_pending_songs};
+use database::{Song, RankedSong, TrendingSong, FailedSample, SimilarSong, Playlist, PlaylistSongDetail, ReviewTask, Tag, PracticeRecord, PracticeSummary, ArtistSummary, ArtistSong, ArtistRecentActivity, SourceStats, get_pending_songs};
 
 #[derive(Serialize)]
 struct HealthResponse { status: String, service: String }
@@ -261,6 +261,7 @@ async fn recognize_audio(
 ) -> Result<HttpResponse, Error> {
     let start = std::time::Instant::now();
     let mut audio_bytes: Option<Vec<u8>> = None;
+    let mut source: Option<String> = None;
 
     while let Some(item) = payload.next().await {
         let mut field = item?;
@@ -268,12 +269,25 @@ async fn recognize_audio(
 
         let name = content_disposition.get_name().unwrap_or("");
 
-        if name == "file" {
-            let mut bytes = web::BytesMut::new();
-            while let Some(chunk) = field.next().await {
-                bytes.extend_from_slice(&chunk?);
+        match name {
+            "file" => {
+                let mut bytes = web::BytesMut::new();
+                while let Some(chunk) = field.next().await {
+                    bytes.extend_from_slice(&chunk?);
+                }
+                audio_bytes = Some(bytes.to_vec());
             }
-            audio_bytes = Some(bytes.to_vec());
+            "source" => {
+                let mut bytes = web::BytesMut::new();
+                while let Some(chunk) = field.next().await {
+                    bytes.extend_from_slice(&chunk?);
+                }
+                let value = String::from_utf8_lossy(&bytes).to_string();
+                if !value.is_empty() {
+                    source = Some(value);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -357,6 +371,7 @@ async fn recognize_audio(
                 song.artist.as_deref(),
                 confidence.min(1.0),
                 processing_time_ms as i64,
+                source.as_deref(),
             ).await;
 
             let similar_songs = database::get_similar_songs(&pool, &song.id, 5)
@@ -387,6 +402,7 @@ async fn recognize_audio(
                 None,
                 0.0,
                 processing_time_ms as i64,
+                source.as_deref(),
             ).await;
 
             let sample_id = Uuid::new_v4().to_string();
@@ -670,6 +686,7 @@ async fn promote_failed_sample(
         sample.duration_sec,
         audio_sample,
         Some("completed"),
+        Some("promoted"),
     ).await {
         Ok(_) => {
             let _ = database::delete_failed_sample(&pool, &sample_id).await;
@@ -1126,6 +1143,7 @@ async fn re_recognize_review_task(
                 song.artist.as_deref(),
                 confidence.min(1.0),
                 processing_time_ms as i64,
+                Some("review"),
             ).await;
 
             let similar_songs = database::get_similar_songs(&pool, &song.id, 5)
@@ -1160,6 +1178,7 @@ async fn re_recognize_review_task(
                 None,
                 0.0,
                 processing_time_ms as i64,
+                Some("review"),
             ).await;
 
             (
@@ -1719,6 +1738,7 @@ async fn upload_song(
     let mut title = String::new();
     let mut artist: Option<String> = None;
     let mut audio_bytes: Option<Vec<u8>> = None;
+    let mut source: Option<String> = None;
 
     while let Some(item) = payload.next().await {
         let mut field = item?;
@@ -1752,6 +1772,16 @@ async fn upload_song(
                     bytes.extend_from_slice(&chunk?);
                 }
                 audio_bytes = Some(bytes.to_vec());
+            }
+            "source" => {
+                let mut bytes = web::BytesMut::new();
+                while let Some(chunk) = field.next().await {
+                    bytes.extend_from_slice(&chunk?);
+                }
+                let value = String::from_utf8_lossy(&bytes).to_string();
+                if !value.is_empty() {
+                    source = Some(value);
+                }
             }
             _ => {}
         }
@@ -1808,6 +1838,7 @@ async fn upload_song(
         Some(duration_sec),
         audio_sample.as_deref(),
         Some("completed"),
+        source.as_deref(),
     ).await {
         Ok(_) => {
             Ok(HttpResponse::Ok().json(UploadResponse {
@@ -1951,6 +1982,7 @@ async fn batch_upload_songs(
             Some(duration_sec),
             audio_sample.as_deref(),
             Some("completed"),
+            Some("batch_import"),
         ).await {
             Ok(_) => {
                 progress.status = "completed".to_string();
@@ -1983,6 +2015,84 @@ async fn batch_upload_songs(
         failed: failed_count,
         results,
     }))
+}
+
+#[derive(Serialize)]
+struct SourceStatsResponse {
+    total: usize,
+    stats: Vec<SourceStats>,
+}
+
+async fn get_history_by_source(
+    query: web::Query<std::collections::HashMap<String, String>>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    let source = query.get("source").map(|s| s.as_str());
+    let limit: i32 = query.get("limit")
+        .and_then(|l| l.parse().ok())
+        .unwrap_or(100);
+
+    match database::get_recognition_history_by_source(&pool, source, limit).await {
+        Ok(history) => HttpResponse::Ok().json(serde_json::json!({
+            "total": history.len(),
+            "items": history
+        })),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch history by source: {}", e),
+        }),
+    }
+}
+
+async fn get_songs_by_source(
+    query: web::Query<std::collections::HashMap<String, String>>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    let source = query.get("source").map(|s| s.as_str());
+    let limit: i32 = query.get("limit")
+        .and_then(|l| l.parse().ok())
+        .unwrap_or(100);
+
+    match database::get_songs_by_source(&pool, source, limit).await {
+        Ok(songs) => HttpResponse::Ok().json(serde_json::json!({
+            "total": songs.len(),
+            "items": songs
+        })),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch songs by source: {}", e),
+        }),
+    }
+}
+
+async fn get_history_source_stats(
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    match database::get_recognition_history_source_stats(&pool).await {
+        Ok(stats) => HttpResponse::Ok().json(SourceStatsResponse {
+            total: stats.len(),
+            stats,
+        }),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch history source stats: {}", e),
+        }),
+    }
+}
+
+async fn get_songs_source_stats(
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    match database::get_songs_source_stats(&pool).await {
+        Ok(stats) => HttpResponse::Ok().json(SourceStatsResponse {
+            total: stats.len(),
+            stats,
+        }),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch songs source stats: {}", e),
+        }),
+    }
 }
 
 #[actix_web::main]
@@ -2057,5 +2167,9 @@ async fn main() -> std::io::Result<()> {
             .route("/api/artists/{name}", web::get().to(get_artist))
             .route("/api/artists/{name}/songs", web::get().to(get_artist_songs))
             .route("/api/artists/{name}/activity", web::get().to(get_artist_activity))
+            .route("/api/history/by-source", web::get().to(get_history_by_source))
+            .route("/api/history/source-stats", web::get().to(get_history_source_stats))
+            .route("/api/songs/by-source", web::get().to(get_songs_by_source))
+            .route("/api/songs/source-stats", web::get().to(get_songs_source_stats))
     }).bind("127.0.0.1:8080")?.run().await
 }

@@ -17,6 +17,8 @@ pub struct Song {
     pub audio_sample: Option<Vec<u8>>,
     #[sqlx(default)]
     pub status: String,
+    #[sqlx(default)]
+    pub source: Option<String>,
 }
 
 pub async fn create_pool() -> SqlitePool {
@@ -34,7 +36,8 @@ pub async fn init_db(pool: &SqlitePool) {
             duration_sec INTEGER,
             created_at TEXT DEFAULT (datetime('now')),
             audio_sample BLOB,
-            status TEXT DEFAULT 'completed'
+            status TEXT DEFAULT 'completed',
+            source TEXT
         )
     "#).execute(pool).await.expect("Failed to init db");
     
@@ -53,6 +56,10 @@ pub async fn init_db(pool: &SqlitePool) {
     sqlx::query(r#"
         ALTER TABLE songs ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'completed'
     "#).execute(pool).await.ok();
+    
+    sqlx::query(r#"
+        ALTER TABLE songs ADD COLUMN IF NOT EXISTS source TEXT
+    "#).execute(pool).await.ok();
 }
 
 pub async fn insert_song(
@@ -66,11 +73,12 @@ pub async fn insert_song(
     duration_sec: Option<i64>,
     audio_sample: Option<&[u8]>,
     status: Option<&str>,
+    source: Option<&str>,
 ) -> Result<(), sqlx::Error> {
     let now = Utc::now().to_rfc3339();
     let status_val = status.unwrap_or("completed");
     sqlx::query(
-        "INSERT INTO songs (id, title, artist, fingerprint_hash, fingerprint_peaks, fingerprint_robust, duration_sec, created_at, audio_sample, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO songs (id, title, artist, fingerprint_hash, fingerprint_peaks, fingerprint_robust, duration_sec, created_at, audio_sample, status, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(id)
     .bind(title)
@@ -82,6 +90,7 @@ pub async fn insert_song(
     .bind(now)
     .bind(audio_sample)
     .bind(status_val)
+    .bind(source)
     .execute(pool)
     .await?;
     Ok(())
@@ -152,6 +161,8 @@ pub struct RecognitionHistory {
     pub confidence: f32,
     pub processing_time_ms: i64,
     pub created_at: String,
+    #[sqlx(default)]
+    pub source: Option<String>,
 }
 
 pub async fn init_history_table(pool: &SqlitePool) {
@@ -164,9 +175,14 @@ pub async fn init_history_table(pool: &SqlitePool) {
             song_artist TEXT,
             confidence REAL NOT NULL,
             processing_time_ms INTEGER NOT NULL,
-            created_at TEXT DEFAULT (datetime('now'))
+            created_at TEXT DEFAULT (datetime('now')),
+            source TEXT
         )
     "#).execute(pool).await.expect("Failed to init history table");
+    
+    sqlx::query(r#"
+        ALTER TABLE recognition_history ADD COLUMN IF NOT EXISTS source TEXT
+    "#).execute(pool).await.ok();
 }
 
 pub async fn insert_recognition_history(
@@ -178,10 +194,11 @@ pub async fn insert_recognition_history(
     song_artist: Option<&str>,
     confidence: f32,
     processing_time_ms: i64,
+    source: Option<&str>,
 ) -> Result<(), sqlx::Error> {
     let now = Utc::now().to_rfc3339();
     sqlx::query(
-        "INSERT INTO recognition_history (id, match_found, song_id, song_title, song_artist, confidence, processing_time_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO recognition_history (id, match_found, song_id, song_title, song_artist, confidence, processing_time_ms, created_at, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(id)
     .bind(match_found)
@@ -191,6 +208,7 @@ pub async fn insert_recognition_history(
     .bind(confidence)
     .bind(processing_time_ms)
     .bind(now)
+    .bind(source)
     .execute(pool)
     .await?;
     Ok(())
@@ -198,7 +216,7 @@ pub async fn insert_recognition_history(
 
 pub async fn get_recognition_history(pool: &SqlitePool, limit: i32) -> Result<Vec<RecognitionHistory>, sqlx::Error> {
     let history = sqlx::query_as::<_, RecognitionHistory>(
-        "SELECT id, match_found, song_id, song_title, song_artist, confidence, processing_time_ms, created_at FROM recognition_history ORDER BY created_at DESC LIMIT ?"
+        "SELECT id, match_found, song_id, song_title, song_artist, confidence, processing_time_ms, created_at, source FROM recognition_history ORDER BY created_at DESC LIMIT ?"
     )
     .bind(limit)
     .fetch_all(pool)
@@ -208,7 +226,7 @@ pub async fn get_recognition_history(pool: &SqlitePool, limit: i32) -> Result<Ve
 
 pub async fn get_recognition_history_by_song_id(pool: &SqlitePool, song_id: &str, limit: i32) -> Result<Vec<RecognitionHistory>, sqlx::Error> {
     let history = sqlx::query_as::<_, RecognitionHistory>(
-        "SELECT id, match_found, song_id, song_title, song_artist, confidence, processing_time_ms, created_at FROM recognition_history WHERE song_id = ? ORDER BY created_at DESC LIMIT ?"
+        "SELECT id, match_found, song_id, song_title, song_artist, confidence, processing_time_ms, created_at, source FROM recognition_history WHERE song_id = ? ORDER BY created_at DESC LIMIT ?"
     )
     .bind(song_id)
     .bind(limit)
@@ -219,7 +237,7 @@ pub async fn get_recognition_history_by_song_id(pool: &SqlitePool, song_id: &str
 
 pub async fn get_recognition_history_by_id(pool: &SqlitePool, id: &str) -> Result<Option<RecognitionHistory>, sqlx::Error> {
     let history = sqlx::query_as::<_, RecognitionHistory>(
-        "SELECT id, match_found, song_id, song_title, song_artist, confidence, processing_time_ms, created_at FROM recognition_history WHERE id = ?"
+        "SELECT id, match_found, song_id, song_title, song_artist, confidence, processing_time_ms, created_at, source FROM recognition_history WHERE id = ?"
     )
     .bind(id)
     .fetch_optional(pool)
@@ -858,7 +876,7 @@ pub async fn get_low_confidence_history(
     limit: i32,
 ) -> Result<Vec<RecognitionHistory>, sqlx::Error> {
     let history = sqlx::query_as::<_, RecognitionHistory>(
-        "SELECT * FROM recognition_history WHERE match_found = 1 AND confidence < ? ORDER BY confidence ASC, created_at DESC LIMIT ?"
+        "SELECT id, match_found, song_id, song_title, song_artist, confidence, processing_time_ms, created_at, source FROM recognition_history WHERE match_found = 1 AND confidence < ? ORDER BY confidence ASC, created_at DESC LIMIT ?"
     )
     .bind(threshold)
     .bind(limit)
@@ -1413,4 +1431,84 @@ pub async fn get_artist_recent_activity(
     .fetch_all(pool)
     .await?;
     Ok(activities)
+}
+
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct SourceStats {
+    pub source: Option<String>,
+    pub count: i64,
+}
+
+pub async fn get_recognition_history_by_source(
+    pool: &SqlitePool,
+    source: Option<&str>,
+    limit: i32,
+) -> Result<Vec<RecognitionHistory>, sqlx::Error> {
+    let history = match source {
+        Some(s) => sqlx::query_as::<_, RecognitionHistory>(
+            "SELECT id, match_found, song_id, song_title, song_artist, confidence, processing_time_ms, created_at, source FROM recognition_history WHERE source = ? ORDER BY created_at DESC LIMIT ?"
+        )
+        .bind(s)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?,
+        None => sqlx::query_as::<_, RecognitionHistory>(
+            "SELECT id, match_found, song_id, song_title, song_artist, confidence, processing_time_ms, created_at, source FROM recognition_history WHERE source IS NULL ORDER BY created_at DESC LIMIT ?"
+        )
+        .bind(limit)
+        .fetch_all(pool)
+        .await?,
+    };
+    Ok(history)
+}
+
+pub async fn get_songs_by_source(
+    pool: &SqlitePool,
+    source: Option<&str>,
+    limit: i32,
+) -> Result<Vec<Song>, sqlx::Error> {
+    let songs = match source {
+        Some(s) => sqlx::query_as::<_, Song>(
+            "SELECT id, title, artist, fingerprint_hash, fingerprint_peaks, fingerprint_robust, duration_sec, created_at, status, source FROM songs WHERE source = ? ORDER BY created_at DESC LIMIT ?"
+        )
+        .bind(s)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?,
+        None => sqlx::query_as::<_, Song>(
+            "SELECT id, title, artist, fingerprint_hash, fingerprint_peaks, fingerprint_robust, duration_sec, created_at, status, source FROM songs WHERE source IS NULL ORDER BY created_at DESC LIMIT ?"
+        )
+        .bind(limit)
+        .fetch_all(pool)
+        .await?,
+    };
+    Ok(songs)
+}
+
+pub async fn get_recognition_history_source_stats(
+    pool: &SqlitePool,
+) -> Result<Vec<SourceStats>, sqlx::Error> {
+    let stats = sqlx::query_as::<_, SourceStats>(r#"
+        SELECT source, COUNT(*) as count
+        FROM recognition_history
+        GROUP BY source
+        ORDER BY count DESC
+    "#)
+    .fetch_all(pool)
+    .await?;
+    Ok(stats)
+}
+
+pub async fn get_songs_source_stats(
+    pool: &SqlitePool,
+) -> Result<Vec<SourceStats>, sqlx::Error> {
+    let stats = sqlx::query_as::<_, SourceStats>(r#"
+        SELECT source, COUNT(*) as count
+        FROM songs
+        GROUP BY source
+        ORDER BY count DESC
+    "#)
+    .fetch_all(pool)
+    .await?;
+    Ok(stats)
 }

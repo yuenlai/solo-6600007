@@ -1,5 +1,7 @@
 export type SongStatus = 'pending' | 'processing' | 'completed' | 'failed';
 
+export type AudioSource = 'microphone' | 'file' | 'batch_import' | 'review' | 'promoted';
+
 export interface Song {
   id: string;
   title: string;
@@ -10,6 +12,7 @@ export interface Song {
   duration_sec: number | null;
   created_at?: string;
   status?: SongStatus;
+  source?: AudioSource | null;
 }
 
 export interface SimilarSong {
@@ -54,6 +57,17 @@ export interface RecognitionHistoryItem {
   confidence: number;
   processing_time_ms: number;
   created_at: string;
+  source?: AudioSource | null;
+}
+
+export interface SourceStats {
+  source: AudioSource | null;
+  count: number;
+}
+
+export interface SourceStatsResponse {
+  total: number;
+  stats: SourceStats[];
 }
 
 export interface BatchUploadProgress {
