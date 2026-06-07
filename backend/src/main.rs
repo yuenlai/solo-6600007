@@ -2,6 +2,7 @@ use actix_web::{web, App, HttpServer, HttpResponse, Error, ResponseError};
 use actix_cors::Cors;
 use actix_multipart::Multipart;
 use serde::{Serialize, Deserialize};
+use serde_json;
 use futures_util::StreamExt;
 use uuid::Uuid;
 use sqlx::SqlitePool;
@@ -266,6 +267,44 @@ async fn get_song_history(
     }
 }
 
+async fn get_song_preview(
+    song_id: web::Path<String>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    match database::get_song_audio_sample(&pool, &song_id).await {
+        Ok(Some(sample)) => {
+            HttpResponse::Ok()
+                .content_type("audio/wav")
+                .append_header(("Content-Disposition", format!("inline; filename=\"preview_{}.wav\"", song_id)))
+                .body(sample)
+        }
+        Ok(None) => HttpResponse::NotFound().json(ErrorResponse {
+            error: "preview_not_found".to_string(),
+            message: "Audio preview not available for this song".to_string(),
+        }),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch audio preview: {}", e),
+        }),
+    }
+}
+
+async fn delete_song(
+    song_id: web::Path<String>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    match database::delete_song(&pool, &song_id).await {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({
+            "status": "success",
+            "message": "Song deleted successfully"
+        })),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to delete song: {}", e),
+        }),
+    }
+}
+
 async fn upload_song(
     mut payload: Multipart,
     pool: web::Data<SqlitePool>,
@@ -338,6 +377,14 @@ async fn upload_song(
         }
     };
 
+    let audio_sample = match fingerprint::extract_preview_sample(&audio_bytes, 30.0) {
+        Ok(sample) => Some(sample),
+        Err(e) => {
+            eprintln!("Warning: Failed to extract preview sample: {:?}", e);
+            None
+        }
+    };
+
     let peaks_json = serde_json::to_string(&peaks).ok();
     let robust_json = serde_json::to_string(&robust).ok();
 
@@ -352,6 +399,7 @@ async fn upload_song(
         peaks_json.as_deref(),
         robust_json.as_deref(),
         Some(duration_sec),
+        audio_sample.as_deref(),
     ).await {
         Ok(_) => {
             Ok(HttpResponse::Ok().json(UploadResponse {
@@ -470,6 +518,14 @@ async fn batch_upload_songs(
             }
         };
 
+        let audio_sample = match fingerprint::extract_preview_sample(audio_bytes, 30.0) {
+            Ok(sample) => Some(sample),
+            Err(e) => {
+                eprintln!("Warning: Failed to extract preview sample for {}: {:?}", file_name, e);
+                None
+            }
+        };
+
         progress.progress = 75;
 
         let peaks_json = serde_json::to_string(&peaks).ok();
@@ -485,6 +541,7 @@ async fn batch_upload_songs(
             peaks_json.as_deref(),
             robust_json.as_deref(),
             Some(duration_sec),
+            audio_sample.as_deref(),
         ).await {
             Ok(_) => {
                 progress.status = "completed".to_string();
@@ -541,6 +598,8 @@ async fn main() -> std::io::Result<()> {
             .route("/api/songs/batch-upload", web::post().to(batch_upload_songs))
             .route("/api/songs/{id}", web::get().to(get_song_detail))
             .route("/api/songs/{id}/history", web::get().to(get_song_history))
+            .route("/api/songs/{id}/preview", web::get().to(get_song_preview))
+            .route("/api/songs/{id}", web::delete().to(delete_song))
             .route("/api/history", web::get().to(get_history))
     }).bind("127.0.0.1:8080")?.run().await
 }

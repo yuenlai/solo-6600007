@@ -58,3 +58,8 @@ export interface BatchUploadResult {
   failed: number;
   results: BatchUploadProgress[];
 }
+
+export interface DeleteSongResponse {
+  status: string;
+  message: string;
+}

@@ -1,5 +1,5 @@
 use rustfft::{FftPlanner, num_complex::Complex};
-use hound::WavReader;
+use hound::{WavReader, WavWriter, SampleFormat, WavSpec};
 use std::io::Cursor;
 
 #[derive(Debug)]
@@ -202,4 +202,42 @@ pub fn process_audio_and_generate_fingerprint(bytes: &[u8]) -> Result<(String, f
     let robust_fps = extract_robust_fingerprints(&audio_data.samples, audio_data.sample_rate as usize);
     let hash = generate_hash(&peaks);
     Ok((hash, audio_data.duration_sec, peaks, robust_fps))
+}
+
+pub fn extract_preview_sample(bytes: &[u8], max_duration_sec: f64) -> Result<Vec<u8>, AudioError> {
+    let audio_data = read_wav_from_bytes(bytes)?;
+    let sample_rate = audio_data.sample_rate;
+    let samples = &audio_data.samples;
+    
+    let preview_duration = max_duration_sec.min(audio_data.duration_sec);
+    let preview_samples_len = (preview_duration * sample_rate as f64) as usize;
+    
+    let start_idx = if samples.len() > preview_samples_len {
+        let mid = samples.len() / 2;
+        mid.saturating_sub(preview_samples_len / 2)
+    } else {
+        0
+    };
+    
+    let end_idx = (start_idx + preview_samples_len).min(samples.len());
+    let preview_samples = &samples[start_idx..end_idx];
+    
+    let spec = WavSpec {
+        channels: 1,
+        sample_rate,
+        bits_per_sample: 16,
+        sample_format: SampleFormat::Int,
+    };
+    
+    let mut cursor = Cursor::new(Vec::new());
+    {
+        let mut writer = WavWriter::new(&mut cursor, spec)?;
+        for &sample in preview_samples {
+            let sample_i16 = (sample * i16::MAX as f32).clamp(-1.0, 1.0) as i16;
+            writer.write_sample(sample_i16)?;
+        }
+        writer.finalize()?;
+    }
+    
+    Ok(cursor.into_inner())
 }

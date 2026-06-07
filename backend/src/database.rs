@@ -12,6 +12,8 @@ pub struct Song {
     pub fingerprint_robust: Option<String>,
     pub duration_sec: Option<i64>,
     pub created_at: String,
+    #[sqlx(default)]
+    pub audio_sample: Option<Vec<u8>>,
 }
 
 pub async fn create_pool() -> SqlitePool {
@@ -27,7 +29,8 @@ pub async fn init_db(pool: &SqlitePool) {
             fingerprint_hash TEXT NOT NULL, fingerprint_peaks TEXT,
             fingerprint_robust TEXT,
             duration_sec INTEGER,
-            created_at TEXT DEFAULT (datetime('now'))
+            created_at TEXT DEFAULT (datetime('now')),
+            audio_sample BLOB
         )
     "#).execute(pool).await.expect("Failed to init db");
     
@@ -37,6 +40,10 @@ pub async fn init_db(pool: &SqlitePool) {
     
     sqlx::query(r#"
         ALTER TABLE songs ADD COLUMN IF NOT EXISTS fingerprint_robust TEXT
+    "#).execute(pool).await.ok();
+    
+    sqlx::query(r#"
+        ALTER TABLE songs ADD COLUMN IF NOT EXISTS audio_sample BLOB
     "#).execute(pool).await.ok();
 }
 
@@ -49,10 +56,11 @@ pub async fn insert_song(
     fingerprint_peaks: Option<&str>,
     fingerprint_robust: Option<&str>,
     duration_sec: Option<i64>,
+    audio_sample: Option<&[u8]>,
 ) -> Result<(), sqlx::Error> {
     let now = Utc::now().to_rfc3339();
     sqlx::query(
-        "INSERT INTO songs (id, title, artist, fingerprint_hash, fingerprint_peaks, fingerprint_robust, duration_sec, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO songs (id, title, artist, fingerprint_hash, fingerprint_peaks, fingerprint_robust, duration_sec, created_at, audio_sample) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(id)
     .bind(title)
@@ -62,6 +70,7 @@ pub async fn insert_song(
     .bind(fingerprint_robust)
     .bind(duration_sec)
     .bind(now)
+    .bind(audio_sample)
     .execute(pool)
     .await?;
     Ok(())
@@ -84,6 +93,16 @@ pub async fn get_song_by_id(pool: &SqlitePool, id: &str) -> Result<Option<Song>,
     .fetch_optional(pool)
     .await?;
     Ok(song)
+}
+
+pub async fn get_song_audio_sample(pool: &SqlitePool, id: &str) -> Result<Option<Vec<u8>>, sqlx::Error> {
+    let sample: Option<(Vec<u8>,)> = sqlx::query_as(
+        "SELECT audio_sample FROM songs WHERE id = ? AND audio_sample IS NOT NULL"
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(sample.map(|s| s.0))
 }
 
 pub async fn delete_song(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {

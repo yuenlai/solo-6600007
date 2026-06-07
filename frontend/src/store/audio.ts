@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import axios from 'axios';
-import { Song, RecognizeResult, UploadSongResponse, RecognitionHistoryItem, BatchUploadProgress, BatchUploadResult } from '../types';
+import { Song, RecognizeResult, UploadSongResponse, RecognitionHistoryItem, BatchUploadProgress, BatchUploadResult, DeleteSongResponse } from '../types';
 
 const API_BASE = 'http://127.0.0.1:8080/api';
 
@@ -25,6 +25,8 @@ interface AudioState {
   batchUploadProgress: BatchUploadProgress[];
   batchUploadResult: BatchUploadResult | null;
   batchUploadError: string | null;
+  isDeletingSong: boolean;
+  deleteSongError: string | null;
   fetchSongs: () => Promise<void>;
   uploadSong: (title: string, artist: string, file: File) => Promise<boolean>;
   batchUploadSongs: (files: File[], defaultArtist?: string) => Promise<boolean>;
@@ -32,6 +34,7 @@ interface AudioState {
   fetchHistory: () => Promise<void>;
   fetchSongDetail: (songId: string) => Promise<void>;
   fetchSongHistory: (songId: string) => Promise<void>;
+  deleteSong: (songId: string) => Promise<boolean>;
   setCurrentSongId: (id: string | null) => void;
   setSongs: (songs: Song[]) => void;
   setRecognizeResult: (r: RecognizeResult | null) => void;
@@ -40,6 +43,7 @@ interface AudioState {
   clearUploadStatus: () => void;
   clearRecognizeStatus: () => void;
   clearBatchUploadStatus: () => void;
+  clearDeleteStatus: () => void;
 }
 
 export const useAudioStore = create<AudioState>((set) => ({
@@ -63,6 +67,8 @@ export const useAudioStore = create<AudioState>((set) => ({
   batchUploadProgress: [],
   batchUploadResult: null,
   batchUploadError: null,
+  isDeletingSong: false,
+  deleteSongError: null,
 
   fetchSongs: async () => {
     try {
@@ -215,4 +221,19 @@ export const useAudioStore = create<AudioState>((set) => ({
   },
 
   setCurrentSongId: (id: string | null) => set({ currentSongId: id, currentSong: null, currentSongHistory: [] }),
+
+  deleteSong: async (songId: string) => {
+    set({ isDeletingSong: true, deleteSongError: null });
+    try {
+      await axios.delete<DeleteSongResponse>(`${API_BASE}/songs/${songId}`);
+      set({ isDeletingSong: false });
+      return true;
+    } catch (error: any) {
+      const message = error.response?.data?.message || error.message || 'Delete failed';
+      set({ isDeletingSong: false, deleteSongError: message });
+      return false;
+    }
+  },
+
+  clearDeleteStatus: () => set({ deleteSongError: null }),
 }));
