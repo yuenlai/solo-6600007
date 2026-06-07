@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import axios from 'axios';
-import { Song, RecognizeResult, UploadSongResponse, RecognitionHistoryItem, BatchUploadProgress, BatchUploadResult, DeleteSongResponse, FailedSample, FailedSamplesResponse, PromoteSampleRequest, PromoteSampleResponse, SimilarSong, SimilarSongsResponse } from '../types';
+import { Song, RecognizeResult, UploadSongResponse, RecognitionHistoryItem, BatchUploadProgress, BatchUploadResult, DeleteSongResponse, FailedSample, FailedSamplesResponse, PromoteSampleRequest, PromoteSampleResponse, SimilarSong, SimilarSongsResponse, CalibrationResult, CalibrationStatus, QualityLevel } from '../types';
 
 const API_BASE = 'http://127.0.0.1:8080/api';
 
@@ -37,6 +37,10 @@ interface AudioState {
   promoteSampleError: string | null;
   similarSongs: SimilarSong[];
   isFetchingSimilarSongs: boolean;
+  calibrationStatus: CalibrationStatus;
+  calibrationResult: CalibrationResult | null;
+  calibrationRealTimeVolume: number;
+  calibrationWaveform: number[];
   fetchSongs: () => Promise<void>;
   fetchPendingSongs: () => Promise<void>;
   uploadSong: (title: string, artist: string, file: File) => Promise<boolean>;
@@ -48,6 +52,9 @@ interface AudioState {
   fetchSimilarSongs: (songId: string, limit?: number) => Promise<void>;
   deleteSong: (songId: string) => Promise<boolean>;
   setCurrentSongId: (id: string | null) => void;
+  startCalibration: (durationMs?: number) => Promise<boolean>;
+  stopCalibration: () => void;
+  clearCalibration: () => void;
   setSongs: (songs: Song[]) => void;
   setRecognizeResult: (r: RecognizeResult | null) => void;
   setRecording: (v: boolean) => void;
@@ -94,6 +101,10 @@ export const useAudioStore = create<AudioState>((set) => ({
   promoteSampleError: null,
   similarSongs: [],
   isFetchingSimilarSongs: false,
+  calibrationStatus: 'idle',
+  calibrationResult: null,
+  calibrationRealTimeVolume: 0,
+  calibrationWaveform: [],
 
   fetchSongs: async () => {
     try {
@@ -328,5 +339,175 @@ export const useAudioStore = create<AudioState>((set) => ({
       console.error('Failed to fetch similar songs:', error);
       set({ similarSongs: [], isFetchingSimilarSongs: false });
     }
+  },
+
+  startCalibration: async (durationMs: number = 2000) => {
+    let audioContext: AudioContext | null = null;
+    let analyser: AnalyserNode | null = null;
+    let stream: MediaStream | null = null;
+    let animationId: number | null = null;
+    const startTime = Date.now();
+
+    try {
+      set({ 
+        calibrationStatus: 'calibrating', 
+        calibrationResult: null,
+        calibrationWaveform: []
+      });
+
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      analyser = audioContext.createAnalyser();
+      analyser.fftSize = 2048;
+      const source = audioContext.createMediaStreamSource(stream);
+      source.connect(analyser);
+
+      const bufferLength = analyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+      const volumes: number[] = [];
+      const peaks: number[] = [];
+      let clippedCount = 0;
+      const waveformHistory: number[] = [];
+
+      const collectData = () => {
+        if (!analyser) return;
+        analyser.getByteTimeDomainData(dataArray);
+        
+        let sum = 0;
+        let peak = 0;
+        let hasClip = false;
+        
+        for (let i = 0; i < bufferLength; i++) {
+          const v = Math.abs(dataArray[i] - 128);
+          sum += v;
+          if (v > peak) peak = v;
+          if (v >= 127) hasClip = true;
+        }
+        
+        const avgVolume = sum / bufferLength;
+        volumes.push(avgVolume);
+        peaks.push(peak);
+        if (hasClip) clippedCount++;
+        
+        waveformHistory.push(avgVolume);
+        if (waveformHistory.length > 100) waveformHistory.shift();
+        
+        set({ 
+          calibrationRealTimeVolume: avgVolume / 128 * 100,
+          calibrationWaveform: [...waveformHistory]
+        });
+
+        const elapsed = Date.now() - startTime;
+        if (elapsed < durationMs) {
+          animationId = requestAnimationFrame(collectData);
+        } else {
+          finishCalibration();
+        }
+      };
+
+      const finishCalibration = () => {
+        stream?.getTracks().forEach(t => t.stop());
+        audioContext?.close();
+        
+        const avgVolume = volumes.reduce((a, b) => a + b, 0) / volumes.length;
+        const maxPeak = Math.max(...peaks);
+        const avgVolumeNorm = avgVolume / 128;
+        const peakNorm = maxPeak / 128;
+        
+        const sortedVolumes = [...volumes].sort((a, b) => a - b);
+        const noiseFloor = sortedVolumes[Math.floor(sortedVolumes.length * 0.1)] / 128;
+        const snr = noiseFloor > 0 ? 20 * Math.log10(avgVolumeNorm / noiseFloor) : 0;
+        
+        let qualityLevel: QualityLevel = 'no_signal';
+        const suggestions: string[] = [];
+        
+        if (avgVolumeNorm < 0.02) {
+          qualityLevel = 'no_signal';
+          suggestions.push('未检测到麦克风输入，请检查麦克风是否连接并授权');
+        } else if (avgVolumeNorm < 0.08) {
+          qualityLevel = 'poor';
+          suggestions.push('输入音量过低，请靠近麦克风或调大麦克风音量');
+        } else if (peakNorm > 0.98 || clippedCount > 5) {
+          qualityLevel = 'poor';
+          suggestions.push('检测到音频削波，请调小麦克风音量或远离音源');
+        } else if (snr < 10) {
+          qualityLevel = 'fair';
+          suggestions.push('环境噪音较大，建议在安静环境下录音');
+        } else if (avgVolumeNorm >= 0.15 && avgVolumeNorm <= 0.5 && snr >= 20) {
+          qualityLevel = 'excellent';
+          suggestions.push('录音环境良好，可以开始识别');
+        } else if (avgVolumeNorm >= 0.1 && avgVolumeNorm <= 0.6 && snr >= 15) {
+          qualityLevel = 'good';
+          suggestions.push('录音环境良好，可以开始识别');
+        } else {
+          qualityLevel = 'fair';
+          if (avgVolumeNorm < 0.1) {
+            suggestions.push('音量稍低，可适当靠近麦克风');
+          } else if (avgVolumeNorm > 0.6) {
+            suggestions.push('音量稍高，可适当远离麦克风');
+          }
+          suggestions.push('建议在安静环境下进行识别');
+        }
+
+        const result: CalibrationResult = {
+          status: 'success',
+          qualityLevel,
+          averageVolume: Math.round(avgVolumeNorm * 100),
+          peakVolume: Math.round(peakNorm * 100),
+          noiseLevel: Math.round(noiseFloor * 100),
+          signalToNoiseRatio: Math.round(snr * 10) / 10,
+          clippedSamples: clippedCount,
+          suggestions,
+          durationMs: Date.now() - startTime,
+        };
+
+        set({ 
+          calibrationStatus: 'success', 
+          calibrationResult: result,
+          calibrationRealTimeVolume: 0
+        });
+      };
+
+      collectData();
+      return true;
+    } catch (error: any) {
+      console.error('Calibration failed:', error);
+      stream?.getTracks().forEach(t => t.stop());
+      audioContext?.close();
+      
+      set({ 
+        calibrationStatus: 'failed',
+        calibrationRealTimeVolume: 0,
+        calibrationResult: {
+          status: 'failed',
+          qualityLevel: 'no_signal',
+          averageVolume: 0,
+          peakVolume: 0,
+          noiseLevel: 0,
+          signalToNoiseRatio: 0,
+          clippedSamples: 0,
+          suggestions: ['校准失败: ' + (error.message || '无法访问麦克风')],
+          durationMs: 0,
+        }
+      });
+      return false;
+    }
+  },
+
+  stopCalibration: () => {
+    set({ 
+      calibrationStatus: 'idle',
+      calibrationRealTimeVolume: 0,
+      calibrationWaveform: []
+    });
+  },
+
+  clearCalibration: () => {
+    set({ 
+      calibrationStatus: 'idle',
+      calibrationResult: null,
+      calibrationRealTimeVolume: 0,
+      calibrationWaveform: []
+    });
   },
 }));

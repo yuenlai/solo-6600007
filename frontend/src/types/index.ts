@@ -108,3 +108,19 @@ export interface SimilarSongsResponse {
   total: number;
   songs: SimilarSong[];
 }
+
+export type CalibrationStatus = 'idle' | 'calibrating' | 'success' | 'failed';
+
+export type QualityLevel = 'excellent' | 'good' | 'fair' | 'poor' | 'no_signal';
+
+export interface CalibrationResult {
+  status: CalibrationStatus;
+  qualityLevel: QualityLevel;
+  averageVolume: number;
+  peakVolume: number;
+  noiseLevel: number;
+  signalToNoiseRatio: number;
+  clippedSamples: number;
+  suggestions: string[];
+  durationMs: number;
+}
