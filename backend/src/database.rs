@@ -112,44 +112,43 @@ pub async fn search_songs(
     artist: Option<&str>,
     limit: i32,
 ) -> Result<Vec<Song>, sqlx::Error> {
-    let mut conditions: Vec<String> = Vec::new();
-    let mut params: Vec<String> = Vec::new();
+    let has_query = query.map(|q| !q.is_empty()).unwrap_or(false);
+    let has_title = title.map(|t| !t.is_empty()).unwrap_or(false);
+    let has_artist = artist.map(|a| !a.is_empty()).unwrap_or(false);
 
-    if let Some(q) = query {
-        if !q.is_empty() {
-            conditions.push("(title LIKE ? OR artist LIKE ?)".to_string());
-            params.push(format!("%{}%", q));
-            params.push(format!("%{}%", q));
-        }
+    if !has_query && !has_title && !has_artist {
+        return get_all_songs(pool).await;
     }
 
-    if let Some(t) = title {
-        if !t.is_empty() {
-            conditions.push("title LIKE ?".to_string());
-            params.push(format!("%{}%", t));
-        }
+    let query_pattern = query.map(|q| format!("%{}%", q));
+    let title_pattern = title.map(|t| format!("%{}%", t));
+    let artist_pattern = artist.map(|a| format!("%{}%", a));
+
+    let mut conditions: Vec<&str> = Vec::new();
+    let mut params: Vec<&str> = Vec::new();
+
+    if has_query {
+        conditions.push("(title LIKE ? OR artist LIKE ?)");
+        params.push(query_pattern.as_ref().unwrap());
+        params.push(query_pattern.as_ref().unwrap());
+    }
+    if has_title {
+        conditions.push("title LIKE ?");
+        params.push(title_pattern.as_ref().unwrap());
+    }
+    if has_artist {
+        conditions.push("artist LIKE ?");
+        params.push(artist_pattern.as_ref().unwrap());
     }
 
-    if let Some(a) = artist {
-        if !a.is_empty() {
-            conditions.push("artist LIKE ?".to_string());
-            params.push(format!("%{}%", a));
-        }
-    }
-
-    let where_clause = if conditions.is_empty() {
-        String::new()
-    } else {
-        format!("WHERE {}", conditions.join(" AND "))
-    };
-
+    let where_clause = conditions.join(" AND ");
     let sql = format!(
-        "SELECT id, title, artist, fingerprint_hash, fingerprint_peaks, fingerprint_robust, duration_sec, created_at, status FROM songs {} ORDER BY created_at DESC LIMIT ?",
+        "SELECT id, title, artist, fingerprint_hash, fingerprint_peaks, fingerprint_robust, duration_sec, created_at, status FROM songs WHERE {} ORDER BY created_at DESC LIMIT ?",
         where_clause
     );
 
     let mut query_builder = sqlx::query_as::<_, Song>(&sql);
-    for param in &params {
+    for param in params {
         query_builder = query_builder.bind(param);
     }
     query_builder = query_builder.bind(limit);

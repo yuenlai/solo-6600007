@@ -29,19 +29,24 @@ def init_db():
             fingerprint_peaks TEXT,
             fingerprint_robust TEXT,
             duration_sec INTEGER,
-            created_at TEXT DEFAULT (datetime('now'))
+            created_at TEXT DEFAULT (datetime('now')),
+            audio_sample BLOB,
+            status TEXT DEFAULT 'completed',
+            source TEXT
         )
     ''')
     
-    try:
-        cursor.execute('ALTER TABLE songs ADD COLUMN fingerprint_peaks TEXT')
-    except sqlite3.OperationalError:
-        pass
-    
-    try:
-        cursor.execute('ALTER TABLE songs ADD COLUMN fingerprint_robust TEXT')
-    except sqlite3.OperationalError:
-        pass
+    for col_name, col_def in [
+        ('fingerprint_peaks', 'TEXT'),
+        ('fingerprint_robust', 'TEXT'),
+        ('audio_sample', 'BLOB'),
+        ('status', "TEXT DEFAULT 'completed'"),
+        ('source', 'TEXT')
+    ]:
+        try:
+            cursor.execute(f'ALTER TABLE songs ADD COLUMN {col_name} {col_def}')
+        except sqlite3.OperationalError:
+            pass
     
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS recognition_history (
@@ -52,9 +57,18 @@ def init_db():
             song_artist TEXT,
             confidence REAL NOT NULL,
             processing_time_ms INTEGER NOT NULL,
-            created_at TEXT DEFAULT (datetime('now'))
+            created_at TEXT DEFAULT (datetime('now')),
+            source TEXT
         )
     ''')
+    
+    for col_name, col_def in [
+        ('source', 'TEXT')
+    ]:
+        try:
+            cursor.execute(f'ALTER TABLE recognition_history ADD COLUMN {col_name} {col_def}')
+        except sqlite3.OperationalError:
+            pass
     
     conn.commit()
     conn.close()
@@ -232,30 +246,81 @@ def health():
         'service': 'Audio Fingerprint Service (Python + SQLite)'
     })
 
+def row_to_song_dict(row):
+    return {
+        'id': row['id'],
+        'title': row['title'],
+        'artist': row['artist'],
+        'fingerprint_hash': row['fingerprint_hash'],
+        'fingerprint_peaks': row['fingerprint_peaks'],
+        'fingerprint_robust': row['fingerprint_robust'],
+        'duration_sec': row['duration_sec'],
+        'created_at': row['created_at'],
+        'status': row['status'] if 'status' in row.keys() else 'completed',
+        'source': row['source'] if 'source' in row.keys() else None
+    }
+
 @app.route('/api/songs', methods=['GET'])
 def list_songs():
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('''
         SELECT id, title, artist, fingerprint_hash, fingerprint_peaks, fingerprint_robust,
-               duration_sec, created_at
+               duration_sec, created_at, status, source
         FROM songs ORDER BY created_at DESC
     ''')
     rows = cursor.fetchall()
-    songs = []
-    for row in rows:
-        songs.append({
-            'id': row['id'],
-            'title': row['title'],
-            'artist': row['artist'],
-            'fingerprint_hash': row['fingerprint_hash'],
-            'fingerprint_peaks': row['fingerprint_peaks'],
-            'fingerprint_robust': row['fingerprint_robust'],
-            'duration_sec': row['duration_sec'],
-            'created_at': row['created_at']
-        })
+    songs = [row_to_song_dict(row) for row in rows]
     conn.close()
     return jsonify(songs)
+
+@app.route('/api/songs/search', methods=['GET'])
+def search_songs():
+    query = request.args.get('q', '').strip()
+    title = request.args.get('title', '').strip()
+    artist = request.args.get('artist', '').strip()
+    limit = int(request.args.get('limit', 100))
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    conditions = []
+    params = []
+    
+    if query:
+        conditions.append("(title LIKE ? OR artist LIKE ?)")
+        params.append(f'%{query}%')
+        params.append(f'%{query}%')
+    
+    if title:
+        conditions.append("title LIKE ?")
+        params.append(f'%{title}%')
+    
+    if artist:
+        conditions.append("artist LIKE ?")
+        params.append(f'%{artist}%')
+    
+    if conditions:
+        where_clause = f"WHERE {' AND '.join(conditions)}"
+    else:
+        where_clause = ''
+    
+    sql = f'''
+        SELECT id, title, artist, fingerprint_hash, fingerprint_peaks, fingerprint_robust,
+               duration_sec, created_at, status, source
+        FROM songs {where_clause} ORDER BY created_at DESC LIMIT ?
+    '''
+    params.append(limit)
+    
+    cursor.execute(sql, params)
+    rows = cursor.fetchall()
+    songs = [row_to_song_dict(row) for row in rows]
+    conn.close()
+    
+    return jsonify({
+        'total': len(songs),
+        'songs': songs
+    })
 
 @app.route('/api/songs/upload', methods=['POST'])
 def upload_song():
@@ -298,14 +363,15 @@ def upload_song():
         song_id = str(uuid.uuid4())
         created_at = datetime.now(timezone.utc).isoformat()
 
+        source = request.form.get('source', None)
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute('''
             INSERT INTO songs (id, title, artist, fingerprint_hash, fingerprint_peaks, 
-                              fingerprint_robust, duration_sec, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                              fingerprint_robust, duration_sec, created_at, status, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'completed', ?)
         ''', (song_id, title, artist, fingerprint_hash, peaks_json, robust_json, 
-              duration_sec_int, created_at))
+              duration_sec_int, created_at, source))
         conn.commit()
         conn.close()
 
@@ -483,7 +549,7 @@ def get_song_detail(song_id):
     cursor = conn.cursor()
     cursor.execute('''
         SELECT id, title, artist, fingerprint_hash, fingerprint_peaks, fingerprint_robust,
-               duration_sec, created_at
+               duration_sec, created_at, status, source
         FROM songs WHERE id = ?
     ''', (song_id,))
     row = cursor.fetchone()
@@ -495,16 +561,7 @@ def get_song_detail(song_id):
             'message': 'Song not found'
         }), 404
     
-    song = {
-        'id': row['id'],
-        'title': row['title'],
-        'artist': row['artist'],
-        'fingerprint_hash': row['fingerprint_hash'],
-        'fingerprint_peaks': row['fingerprint_peaks'],
-        'fingerprint_robust': row['fingerprint_robust'],
-        'duration_sec': row['duration_sec'],
-        'created_at': row['created_at']
-    }
+    song = row_to_song_dict(row)
     return jsonify(song)
 
 @app.route('/api/songs/<song_id>/history', methods=['GET'])
@@ -589,8 +646,8 @@ def batch_upload_songs():
             cursor = conn.cursor()
             cursor.execute('''
                 INSERT INTO songs (id, title, artist, fingerprint_hash, fingerprint_peaks, 
-                                  fingerprint_robust, duration_sec, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                  fingerprint_robust, duration_sec, created_at, status, source)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'completed', 'batch_import')
             ''', (song_id, title, artist, fingerprint_hash, peaks_json, robust_json, 
                   duration_sec_int, created_at))
             conn.commit()
@@ -641,6 +698,7 @@ if __name__ == '__main__':
     print("Available endpoints:")
     print("  GET  /api/health             - Health check")
     print("  GET  /api/songs              - List all songs from SQLite")
+    print("  GET  /api/songs/search       - Search songs by title/artist")
     print("  GET  /api/songs/<id>         - Get song detail by ID")
     print("  GET  /api/songs/<id>/history - Get recognition history for a song")
     print("  POST /api/songs/upload       - Upload a new song (writes to SQLite)")
