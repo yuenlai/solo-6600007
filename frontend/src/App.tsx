@@ -11,10 +11,12 @@ import { AddToPlaylist } from './components/AddToPlaylist';
 import { OnboardingGuide } from './components/OnboardingGuide';
 import { OfflineDrafts } from './components/OfflineDrafts';
 import { ReviewTasks } from './components/ReviewTasks';
+import { ArtistList } from './components/ArtistList';
+import { ArtistDetail } from './components/ArtistDetail';
 import { useAudioStore } from './store/audio';
 
 const App: React.FC = () => {
-  const [tab, setTab] = useState<'recognize' | 'compare' | 'library' | 'queue' | 'history' | 'failed' | 'playlists' | 'drafts' | 'review'>('recognize');
+  const [tab, setTab] = useState<'recognize' | 'compare' | 'library' | 'artists' | 'queue' | 'history' | 'failed' | 'playlists' | 'drafts' | 'review'>('recognize');
   const { 
     recognizeResult, 
     currentSongId, 
@@ -30,6 +32,7 @@ const App: React.FC = () => {
   } = useAudioStore();
   const [showAddToPlaylist, setShowAddToPlaylist] = useState(false);
   const [addToPlaylistSong, setAddToPlaylistSong] = useState<{ id: string; title: string } | null>(null);
+  const [currentArtistName, setCurrentArtistName] = useState<string | null>(null);
 
   const pendingCount = pendingSongs.length;
   const failedCount = failedSamples.length;
@@ -102,6 +105,7 @@ const App: React.FC = () => {
           { key: 'recognize', label: '🎤 识别', onboarding: 'recognize' },
           { key: 'compare', label: '🔄 对比识别' },
           { key: 'library', label: '📚 指纹库', onboarding: 'library' },
+          { key: 'artists', label: '🎤 歌手' },
           { key: 'playlists', label: '🎵 歌单收藏' },
           { key: 'queue', label: `⏳ 待处理${pendingCount > 0 ? ` (${pendingCount})` : ''}` },
           { key: 'failed', label: `🗑️ 失败样本${failedCount > 0 ? ` (${failedCount})` : ''}` },
@@ -114,12 +118,13 @@ const App: React.FC = () => {
             data-onboarding={t.onboarding}
             onClick={() => {
               setCurrentSongId(null);
+              setCurrentArtistName(null);
               setTab(t.key as any);
             }}
             style={{
               display: 'block', width: '100%', padding: '12px 16px', border: 'none', textAlign: 'left',
               cursor: 'pointer',
-              background: (tab === t.key && !currentSongId && !currentPlaylistId) ? 'rgba(255,255,255,0.1)' : 'transparent',
+              background: (tab === t.key && !currentSongId && !currentPlaylistId && !currentArtistName) ? 'rgba(255,255,255,0.1)' : 'transparent',
               color: '#fff',
               fontSize: '14px',
             }}
@@ -129,6 +134,11 @@ const App: React.FC = () => {
       <main style={{ flex: 1, overflow: 'auto', background: '#fafafa' }}>
         {currentSongId ? (
           <SongDetail />
+        ) : currentArtistName ? (
+          <ArtistDetail
+            artistName={currentArtistName}
+            onBack={() => setCurrentArtistName(null)}
+          />
         ) : currentPlaylistId || tab === 'playlists' ? (
           <PlaylistManager />
         ) : (
@@ -225,6 +235,13 @@ const App: React.FC = () => {
             )}
             {tab === 'compare' && <CompareRecorder />}
             {tab === 'library' && <SongLibrary />}
+            {tab === 'artists' && (
+              <ArtistList
+                onSelectArtist={(artistName) => {
+                  setCurrentArtistName(artistName);
+                }}
+              />
+            )}
             {tab === 'queue' && <PendingQueue />}
             {tab === 'failed' && <FailedSamples />}
             {tab === 'drafts' && <OfflineDrafts />}

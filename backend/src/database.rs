@@ -1295,3 +1295,122 @@ pub async fn get_practice_summary(
     .await?;
     Ok(summary)
 }
+
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct ArtistSummary {
+    pub artist: String,
+    pub song_count: i64,
+    pub total_recognitions: i64,
+    pub last_recognition_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct ArtistDetail {
+    pub artist: String,
+    pub song_count: i64,
+    pub total_recognitions: i64,
+    pub first_seen_at: Option<String>,
+    pub last_recognition_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct ArtistSong {
+    pub song_id: String,
+    pub title: String,
+    pub recognition_count: i64,
+    pub created_at: String,
+    pub duration_sec: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct ArtistRecentActivity {
+    pub id: String,
+    pub song_id: String,
+    pub song_title: String,
+    pub confidence: f32,
+    pub created_at: String,
+}
+
+pub async fn get_all_artists(pool: &SqlitePool, limit: i32) -> Result<Vec<ArtistSummary>, sqlx::Error> {
+    let artists = sqlx::query_as::<_, ArtistSummary>(r#"
+        SELECT 
+            s.artist,
+            COUNT(DISTINCT s.id) as song_count,
+            COALESCE(COUNT(rh.id), 0) as total_recognitions,
+            MAX(rh.created_at) as last_recognition_at
+        FROM songs s
+        LEFT JOIN recognition_history rh ON s.id = rh.song_id AND rh.match_found = 1
+        WHERE s.artist IS NOT NULL AND s.artist != ''
+        GROUP BY s.artist
+        ORDER BY total_recognitions DESC, song_count DESC
+        LIMIT ?
+    "#)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(artists)
+}
+
+pub async fn get_artist_detail(pool: &SqlitePool, artist_name: &str) -> Result<Option<ArtistDetail>, sqlx::Error> {
+    let artist = sqlx::query_as::<_, ArtistDetail>(r#"
+        SELECT 
+            s.artist,
+            COUNT(DISTINCT s.id) as song_count,
+            COALESCE(COUNT(rh.id), 0) as total_recognitions,
+            MIN(s.created_at) as first_seen_at,
+            MAX(rh.created_at) as last_recognition_at
+        FROM songs s
+        LEFT JOIN recognition_history rh ON s.id = rh.song_id AND rh.match_found = 1
+        WHERE s.artist = ?
+        GROUP BY s.artist
+    "#)
+    .bind(artist_name)
+    .fetch_optional(pool)
+    .await?;
+    Ok(artist)
+}
+
+pub async fn get_artist_songs(pool: &SqlitePool, artist_name: &str) -> Result<Vec<ArtistSong>, sqlx::Error> {
+    let songs = sqlx::query_as::<_, ArtistSong>(r#"
+        SELECT 
+            s.id as song_id,
+            s.title,
+            COALESCE(COUNT(rh.id), 0) as recognition_count,
+            s.created_at,
+            s.duration_sec
+        FROM songs s
+        LEFT JOIN recognition_history rh ON s.id = rh.song_id AND rh.match_found = 1
+        WHERE s.artist = ?
+        GROUP BY s.id, s.title, s.created_at, s.duration_sec
+        ORDER BY recognition_count DESC, s.created_at DESC
+    "#)
+    .bind(artist_name)
+    .fetch_all(pool)
+    .await?;
+    Ok(songs)
+}
+
+pub async fn get_artist_recent_activity(
+    pool: &SqlitePool,
+    artist_name: &str,
+    limit: i32,
+) -> Result<Vec<ArtistRecentActivity>, sqlx::Error> {
+    let activities = sqlx::query_as::<_, ArtistRecentActivity>(r#"
+        SELECT 
+            rh.id,
+            rh.song_id,
+            rh.song_title,
+            rh.confidence,
+            rh.created_at
+        FROM recognition_history rh
+        JOIN songs s ON rh.song_id = s.id
+        WHERE rh.match_found = 1 AND s.artist = ?
+        ORDER BY rh.created_at DESC
+        LIMIT ?
+    "#)
+    .bind(artist_name)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(activities)
+}

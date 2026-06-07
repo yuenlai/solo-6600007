@@ -243,3 +243,49 @@ export interface LowConfidenceHistoryResponse {
   total: number;
   items: RecognitionHistoryItem[];
 }
+
+export interface ArtistSummary {
+  artist: string;
+  song_count: number;
+  total_recognitions: number;
+  last_recognition_at: string | null;
+}
+
+export interface ArtistDetail {
+  artist: string;
+  song_count: number;
+  total_recognitions: number;
+  first_seen_at: string | null;
+  last_recognition_at: string | null;
+}
+
+export interface ArtistSong {
+  song_id: string;
+  title: string;
+  recognition_count: number;
+  created_at: string;
+  duration_sec: number | null;
+}
+
+export interface ArtistRecentActivity {
+  id: string;
+  song_id: string;
+  song_title: string;
+  confidence: number;
+  created_at: string;
+}
+
+export interface ArtistsResponse {
+  total: number;
+  artists: ArtistSummary[];
+}
+
+export interface ArtistSongsResponse {
+  total: number;
+  songs: ArtistSong[];
+}
+
+export interface ArtistActivityResponse {
+  total: number;
+  activities: ArtistRecentActivity[];
+}

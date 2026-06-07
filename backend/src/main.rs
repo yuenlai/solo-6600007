@@ -11,7 +11,7 @@ use std::fmt;
 mod fingerprint;
 mod database;
 
-use database::{Song, RecognitionHistory, RankedSong, TrendingSong, FailedSample, SimilarSong, Playlist, PlaylistSongDetail, ReviewTask, Tag, PracticeRecord, PracticeSummary, get_pending_songs};
+use database::{Song, RankedSong, TrendingSong, FailedSample, SimilarSong, Playlist, PlaylistSongDetail, ReviewTask, Tag, PracticeRecord, PracticeSummary, ArtistSummary, ArtistSong, ArtistRecentActivity, get_pending_songs};
 
 #[derive(Serialize)]
 struct HealthResponse { status: String, service: String }
@@ -219,6 +219,24 @@ struct PracticeRecordsResponse {
 #[derive(Serialize)]
 struct PracticeSummaryResponse {
     summary: PracticeSummary,
+}
+
+#[derive(Serialize)]
+struct ArtistsResponse {
+    total: usize,
+    artists: Vec<ArtistSummary>,
+}
+
+#[derive(Serialize)]
+struct ArtistSongsResponse {
+    total: usize,
+    songs: Vec<ArtistSong>,
+}
+
+#[derive(Serialize)]
+struct ArtistActivityResponse {
+    total: usize,
+    activities: Vec<ArtistRecentActivity>,
 }
 
 fn convert_playlist(p: Playlist) -> PlaylistResponse {
@@ -1620,6 +1638,80 @@ async fn get_practice_summary(
     }
 }
 
+async fn list_artists(
+    query: web::Query<std::collections::HashMap<String, String>>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    let limit: i32 = query.get("limit")
+        .and_then(|l| l.parse().ok())
+        .unwrap_or(100);
+
+    match database::get_all_artists(&pool, limit).await {
+        Ok(artists) => HttpResponse::Ok().json(ArtistsResponse {
+            total: artists.len(),
+            artists,
+        }),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch artists: {}", e),
+        }),
+    }
+}
+
+async fn get_artist(
+    artist_name: web::Path<String>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    match database::get_artist_detail(&pool, &artist_name).await {
+        Ok(Some(artist)) => HttpResponse::Ok().json(artist),
+        Ok(None) => HttpResponse::NotFound().json(ErrorResponse {
+            error: "artist_not_found".to_string(),
+            message: "Artist not found".to_string(),
+        }),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch artist: {}", e),
+        }),
+    }
+}
+
+async fn get_artist_songs(
+    artist_name: web::Path<String>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    match database::get_artist_songs(&pool, &artist_name).await {
+        Ok(songs) => HttpResponse::Ok().json(ArtistSongsResponse {
+            total: songs.len(),
+            songs,
+        }),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch artist songs: {}", e),
+        }),
+    }
+}
+
+async fn get_artist_activity(
+    artist_name: web::Path<String>,
+    query: web::Query<std::collections::HashMap<String, String>>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    let limit: i32 = query.get("limit")
+        .and_then(|l| l.parse().ok())
+        .unwrap_or(50);
+
+    match database::get_artist_recent_activity(&pool, &artist_name, limit).await {
+        Ok(activities) => HttpResponse::Ok().json(ArtistActivityResponse {
+            total: activities.len(),
+            activities,
+        }),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch artist activity: {}", e),
+        }),
+    }
+}
+
 async fn upload_song(
     mut payload: Multipart,
     pool: web::Data<SqlitePool>,
@@ -1961,5 +2053,9 @@ async fn main() -> std::io::Result<()> {
             .route("/api/practice/today", web::get().to(get_practice_record))
             .route("/api/practice/records", web::get().to(get_practice_records))
             .route("/api/practice/summary", web::get().to(get_practice_summary))
+            .route("/api/artists", web::get().to(list_artists))
+            .route("/api/artists/{name}", web::get().to(get_artist))
+            .route("/api/artists/{name}/songs", web::get().to(get_artist_songs))
+            .route("/api/artists/{name}/activity", web::get().to(get_artist_activity))
     }).bind("127.0.0.1:8080")?.run().await
 }
