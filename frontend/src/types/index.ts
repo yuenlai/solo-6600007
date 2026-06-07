@@ -144,3 +144,48 @@ export interface CalibrationResult {
   suggestions: string[];
   durationMs: number;
 }
+
+export interface Playlist {
+  id: string;
+  name: string;
+  description: string | null;
+  created_at: string;
+  song_count: number;
+}
+
+export interface PlaylistSongDetail {
+  song_id: string;
+  title: string;
+  artist: string | null;
+  duration_sec: number | null;
+  added_at: string;
+}
+
+export interface PlaylistsResponse {
+  total: number;
+  playlists: Playlist[];
+}
+
+export interface PlaylistSongsResponse {
+  total: number;
+  songs: PlaylistSongDetail[];
+}
+
+export interface CreatePlaylistRequest {
+  name: string;
+  description?: string | null;
+}
+
+export interface UpdatePlaylistRequest {
+  name: string;
+  description?: string | null;
+}
+
+export interface AddSongToPlaylistRequest {
+  song_id: string;
+}
+
+export interface SongPlaylistsResponse {
+  total: number;
+  playlist_ids: string[];
+}

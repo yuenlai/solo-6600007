@@ -6,11 +6,15 @@ import { RecognitionHistory } from './components/RecognitionHistory';
 import { SongDetail } from './components/SongDetail';
 import { PendingQueue } from './components/PendingQueue';
 import { FailedSamples } from './components/FailedSamples';
+import { PlaylistManager } from './components/PlaylistManager';
+import { AddToPlaylist } from './components/AddToPlaylist';
 import { useAudioStore } from './store/audio';
 
 const App: React.FC = () => {
-  const [tab, setTab] = useState<'recognize' | 'compare' | 'library' | 'queue' | 'history' | 'failed'>('recognize');
-  const { recognizeResult, currentSongId, setCurrentSongId, pendingSongs, failedSamples } = useAudioStore();
+  const [tab, setTab] = useState<'recognize' | 'compare' | 'library' | 'queue' | 'history' | 'failed' | 'playlists'>('recognize');
+  const { recognizeResult, currentSongId, setCurrentSongId, pendingSongs, failedSamples, currentPlaylistId } = useAudioStore();
+  const [showAddToPlaylist, setShowAddToPlaylist] = useState(false);
+  const [addToPlaylistSong, setAddToPlaylistSong] = useState<{ id: string; title: string } | null>(null);
 
   const pendingCount = pendingSongs.length;
   const failedCount = failedSamples.length;
@@ -23,6 +27,7 @@ const App: React.FC = () => {
           { key: 'recognize', label: '🎤 识别' },
           { key: 'compare', label: '🔄 对比识别' },
           { key: 'library', label: '📚 指纹库' },
+          { key: 'playlists', label: '🎵 歌单收藏' },
           { key: 'queue', label: `⏳ 待处理${pendingCount > 0 ? ` (${pendingCount})` : ''}` },
           { key: 'failed', label: `🗑️ 失败样本${failedCount > 0 ? ` (${failedCount})` : ''}` },
           { key: 'history', label: '📋 历史' },
@@ -35,7 +40,9 @@ const App: React.FC = () => {
             }}
             style={{
               display: 'block', width: '100%', padding: '12px 16px', border: 'none', textAlign: 'left',
-              cursor: 'pointer', background: tab === t.key && !currentSongId ? 'rgba(255,255,255,0.1)' : 'transparent', color: '#fff',
+              cursor: 'pointer',
+              background: (tab === t.key && !currentSongId && !currentPlaylistId) ? 'rgba(255,255,255,0.1)' : 'transparent',
+              color: '#fff',
               fontSize: '14px',
             }}
           >{t.label}</button>
@@ -44,6 +51,8 @@ const App: React.FC = () => {
       <main style={{ flex: 1, overflow: 'auto', background: '#fafafa' }}>
         {currentSongId ? (
           <SongDetail />
+        ) : currentPlaylistId || tab === 'playlists' ? (
+          <PlaylistManager />
         ) : (
           <>
             {tab === 'recognize' && (
@@ -61,6 +70,28 @@ const App: React.FC = () => {
                           <div style={{ marginTop: '8px', fontSize: '12px', color: '#999' }}>
                             置信度: {(recognizeResult.confidence * 100).toFixed(0)}% · 耗时: {recognizeResult.processing_time_ms}ms
                           </div>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (recognizeResult.song) {
+                                setAddToPlaylistSong({ id: recognizeResult.song.id, title: recognizeResult.song.title });
+                                setShowAddToPlaylist(true);
+                              }
+                            }}
+                            style={{
+                              marginTop: '16px',
+                              padding: '10px 24px',
+                              border: 'none',
+                              background: '#ff9800',
+                              color: '#fff',
+                              borderRadius: '8px',
+                              cursor: 'pointer',
+                              fontSize: '14px',
+                              fontWeight: 500,
+                            }}
+                          >
+                            ⭐ 收藏到歌单
+                          </button>
                         </>
                       ) : (
                         <>
@@ -122,6 +153,16 @@ const App: React.FC = () => {
           </>
         )}
       </main>
+      {showAddToPlaylist && addToPlaylistSong && (
+        <AddToPlaylist
+          songId={addToPlaylistSong.id}
+          songTitle={addToPlaylistSong.title}
+          onClose={() => {
+            setShowAddToPlaylist(false);
+            setAddToPlaylistSong(null);
+          }}
+        />
+      )}
     </div>
   );
 };

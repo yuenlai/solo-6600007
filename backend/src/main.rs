@@ -11,7 +11,7 @@ use std::fmt;
 mod fingerprint;
 mod database;
 
-use database::{Song, RecognitionHistory, RankedSong, TrendingSong, FailedSample, SimilarSong, get_pending_songs};
+use database::{Song, RecognitionHistory, RankedSong, TrendingSong, FailedSample, SimilarSong, Playlist, PlaylistSongDetail, get_pending_songs};
 
 #[derive(Serialize)]
 struct HealthResponse { status: String, service: String }
@@ -107,6 +107,54 @@ struct PromoteSampleResponse {
     status: String,
     song_id: String,
     message: String,
+}
+
+#[derive(Deserialize)]
+struct CreatePlaylistRequest {
+    name: String,
+    description: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct UpdatePlaylistRequest {
+    name: String,
+    description: Option<String>,
+}
+
+#[derive(Serialize)]
+struct PlaylistResponse {
+    id: String,
+    name: String,
+    description: Option<String>,
+    created_at: String,
+    song_count: i64,
+}
+
+#[derive(Serialize)]
+struct PlaylistsResponse {
+    total: usize,
+    playlists: Vec<PlaylistResponse>,
+}
+
+#[derive(Serialize)]
+struct PlaylistSongsResponse {
+    total: usize,
+    songs: Vec<PlaylistSongDetail>,
+}
+
+#[derive(Deserialize)]
+struct AddSongToPlaylistRequest {
+    song_id: String,
+}
+
+fn convert_playlist(p: Playlist) -> PlaylistResponse {
+    PlaylistResponse {
+        id: p.id,
+        name: p.name,
+        description: p.description,
+        created_at: p.created_at,
+        song_count: p.song_count.unwrap_or(0),
+    }
 }
 
 async fn health() -> HttpResponse {
@@ -546,6 +594,172 @@ async fn promote_failed_sample(
     }
 }
 
+async fn list_playlists(pool: web::Data<SqlitePool>) -> HttpResponse {
+    match database::get_all_playlists(&pool).await {
+        Ok(playlists) => HttpResponse::Ok().json(PlaylistsResponse {
+            total: playlists.len(),
+            playlists: playlists.into_iter().map(convert_playlist).collect(),
+        }),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch playlists: {}", e),
+        }),
+    }
+}
+
+async fn create_playlist(
+    body: web::Json<CreatePlaylistRequest>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    if body.name.is_empty() {
+        return HttpResponse::BadRequest().json(ErrorResponse {
+            error: "missing_name".to_string(),
+            message: "Playlist name is required".to_string(),
+        });
+    }
+
+    let playlist_id = Uuid::new_v4().to_string();
+    match database::create_playlist(&pool, &playlist_id, &body.name, body.description.as_deref()).await {
+        Ok(_) => match database::get_playlist_by_id(&pool, &playlist_id).await {
+            Ok(Some(playlist)) => HttpResponse::Ok().json(convert_playlist(playlist)),
+            _ => HttpResponse::InternalServerError().json(ErrorResponse {
+                error: "create_error".to_string(),
+                message: "Failed to create playlist".to_string(),
+            }),
+        },
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to create playlist: {}", e),
+        }),
+    }
+}
+
+async fn get_playlist(
+    playlist_id: web::Path<String>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    match database::get_playlist_by_id(&pool, &playlist_id).await {
+        Ok(Some(playlist)) => HttpResponse::Ok().json(convert_playlist(playlist)),
+        Ok(None) => HttpResponse::NotFound().json(ErrorResponse {
+            error: "playlist_not_found".to_string(),
+            message: "Playlist not found".to_string(),
+        }),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch playlist: {}", e),
+        }),
+    }
+}
+
+async fn update_playlist(
+    playlist_id: web::Path<String>,
+    body: web::Json<UpdatePlaylistRequest>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    if body.name.is_empty() {
+        return HttpResponse::BadRequest().json(ErrorResponse {
+            error: "missing_name".to_string(),
+            message: "Playlist name is required".to_string(),
+        });
+    }
+
+    match database::update_playlist(&pool, &playlist_id, &body.name, body.description.as_deref()).await {
+        Ok(_) => match database::get_playlist_by_id(&pool, &playlist_id).await {
+            Ok(Some(playlist)) => HttpResponse::Ok().json(convert_playlist(playlist)),
+            _ => HttpResponse::NotFound().json(ErrorResponse {
+                error: "playlist_not_found".to_string(),
+                message: "Playlist not found".to_string(),
+            }),
+        },
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to update playlist: {}", e),
+        }),
+    }
+}
+
+async fn delete_playlist(
+    playlist_id: web::Path<String>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    match database::delete_playlist(&pool, &playlist_id).await {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({
+            "status": "success",
+            "message": "Playlist deleted successfully"
+        })),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to delete playlist: {}", e),
+        }),
+    }
+}
+
+async fn get_playlist_songs(
+    playlist_id: web::Path<String>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    match database::get_playlist_songs(&pool, &playlist_id).await {
+        Ok(songs) => HttpResponse::Ok().json(PlaylistSongsResponse {
+            total: songs.len(),
+            songs,
+        }),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch playlist songs: {}", e),
+        }),
+    }
+}
+
+async fn add_song_to_playlist(
+    playlist_id: web::Path<String>,
+    body: web::Json<AddSongToPlaylistRequest>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    match database::add_song_to_playlist(&pool, &playlist_id, &body.song_id).await {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({
+            "status": "success",
+            "message": "Song added to playlist successfully"
+        })),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to add song to playlist: {}", e),
+        }),
+    }
+}
+
+async fn remove_song_from_playlist(
+    path: web::Path<(String, String)>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    let (playlist_id, song_id) = path.into_inner();
+    match database::remove_song_from_playlist(&pool, &playlist_id, &song_id).await {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({
+            "status": "success",
+            "message": "Song removed from playlist successfully"
+        })),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to remove song from playlist: {}", e),
+        }),
+    }
+}
+
+async fn get_song_playlists(
+    song_id: web::Path<String>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    match database::get_song_playlists(&pool, &song_id).await {
+        Ok(playlist_ids) => HttpResponse::Ok().json(serde_json::json!({
+            "total": playlist_ids.len(),
+            "playlist_ids": playlist_ids
+        })),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch song playlists: {}", e),
+        }),
+    }
+}
+
 async fn upload_song(
     mut payload: Multipart,
     pool: web::Data<SqlitePool>,
@@ -828,6 +1042,7 @@ async fn main() -> std::io::Result<()> {
     database::init_db(&pool).await;
     database::init_history_table(&pool).await;
     database::init_failed_samples_table(&pool).await;
+    database::init_playlists_tables(&pool).await;
     println!("Database initialized");
 
     HttpServer::new(move || {
@@ -853,5 +1068,14 @@ async fn main() -> std::io::Result<()> {
             .route("/api/failed-samples/{id}/preview", web::get().to(get_failed_sample_preview))
             .route("/api/failed-samples/{id}", web::delete().to(delete_failed_sample))
             .route("/api/failed-samples/{id}/promote", web::post().to(promote_failed_sample))
+            .route("/api/playlists", web::get().to(list_playlists))
+            .route("/api/playlists", web::post().to(create_playlist))
+            .route("/api/playlists/{id}", web::get().to(get_playlist))
+            .route("/api/playlists/{id}", web::put().to(update_playlist))
+            .route("/api/playlists/{id}", web::delete().to(delete_playlist))
+            .route("/api/playlists/{id}/songs", web::get().to(get_playlist_songs))
+            .route("/api/playlists/{id}/songs", web::post().to(add_song_to_playlist))
+            .route("/api/playlists/{playlist_id}/songs/{song_id}", web::delete().to(remove_song_from_playlist))
+            .route("/api/songs/{id}/playlists", web::get().to(get_song_playlists))
     }).bind("127.0.0.1:8080")?.run().await
 }

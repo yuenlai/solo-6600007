@@ -494,3 +494,184 @@ fn calculate_hash_similarity_score(hash1: &str, hash2: &str) -> f32 {
         matches as f32 / min_len as f32
     }
 }
+
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct Playlist {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub created_at: String,
+    #[sqlx(default)]
+    pub song_count: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct PlaylistSong {
+    pub playlist_id: String,
+    pub song_id: String,
+    pub added_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct PlaylistSongDetail {
+    pub song_id: String,
+    pub title: String,
+    pub artist: Option<String>,
+    pub duration_sec: Option<i64>,
+    pub added_at: String,
+}
+
+pub async fn init_playlists_tables(pool: &SqlitePool) {
+    sqlx::query(r#"
+        CREATE TABLE IF NOT EXISTS playlists (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        )
+    "#).execute(pool).await.expect("Failed to init playlists table");
+    
+    sqlx::query(r#"
+        CREATE TABLE IF NOT EXISTS playlist_songs (
+            playlist_id TEXT NOT NULL,
+            song_id TEXT NOT NULL,
+            added_at TEXT DEFAULT (datetime('now')),
+            PRIMARY KEY (playlist_id, song_id),
+            FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE,
+            FOREIGN KEY (song_id) REFERENCES songs(id) ON DELETE CASCADE
+        )
+    "#).execute(pool).await.expect("Failed to init playlist_songs table");
+}
+
+pub async fn create_playlist(
+    pool: &SqlitePool,
+    id: &str,
+    name: &str,
+    description: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "INSERT INTO playlists (id, name, description, created_at) VALUES (?, ?, ?, ?)"
+    )
+    .bind(id)
+    .bind(name)
+    .bind(description)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_all_playlists(pool: &SqlitePool) -> Result<Vec<Playlist>, sqlx::Error> {
+    let playlists = sqlx::query_as::<_, Playlist>(r#"
+        SELECT p.id, p.name, p.description, p.created_at, COUNT(ps.song_id) as song_count
+        FROM playlists p
+        LEFT JOIN playlist_songs ps ON p.id = ps.playlist_id
+        GROUP BY p.id, p.name, p.description, p.created_at
+        ORDER BY p.created_at DESC
+    "#)
+    .fetch_all(pool)
+    .await?;
+    Ok(playlists)
+}
+
+pub async fn get_playlist_by_id(pool: &SqlitePool, id: &str) -> Result<Option<Playlist>, sqlx::Error> {
+    let playlist = sqlx::query_as::<_, Playlist>(r#"
+        SELECT p.id, p.name, p.description, p.created_at, COUNT(ps.song_id) as song_count
+        FROM playlists p
+        LEFT JOIN playlist_songs ps ON p.id = ps.playlist_id
+        WHERE p.id = ?
+        GROUP BY p.id, p.name, p.description, p.created_at
+    "#)
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(playlist)
+}
+
+pub async fn update_playlist(
+    pool: &SqlitePool,
+    id: &str,
+    name: &str,
+    description: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE playlists SET name = ?, description = ? WHERE id = ?"
+    )
+    .bind(name)
+    .bind(description)
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn delete_playlist(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM playlists WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn add_song_to_playlist(
+    pool: &SqlitePool,
+    playlist_id: &str,
+    song_id: &str,
+) -> Result<(), sqlx::Error> {
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "INSERT OR IGNORE INTO playlist_songs (playlist_id, song_id, added_at) VALUES (?, ?, ?)"
+    )
+    .bind(playlist_id)
+    .bind(song_id)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn remove_song_from_playlist(
+    pool: &SqlitePool,
+    playlist_id: &str,
+    song_id: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "DELETE FROM playlist_songs WHERE playlist_id = ? AND song_id = ?"
+    )
+    .bind(playlist_id)
+    .bind(song_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_playlist_songs(
+    pool: &SqlitePool,
+    playlist_id: &str,
+) -> Result<Vec<PlaylistSongDetail>, sqlx::Error> {
+    let songs = sqlx::query_as::<_, PlaylistSongDetail>(r#"
+        SELECT s.id as song_id, s.title, s.artist, s.duration_sec, ps.added_at
+        FROM playlist_songs ps
+        JOIN songs s ON ps.song_id = s.id
+        WHERE ps.playlist_id = ?
+        ORDER BY ps.added_at DESC
+    "#)
+    .bind(playlist_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(songs)
+}
+
+pub async fn get_song_playlists(
+    pool: &SqlitePool,
+    song_id: &str,
+) -> Result<Vec<String>, sqlx::Error> {
+    let playlist_ids: Vec<(String,)> = sqlx::query_as(
+        "SELECT playlist_id FROM playlist_songs WHERE song_id = ?"
+    )
+    .bind(song_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(playlist_ids.into_iter().map(|(id,)| id).collect())
+}

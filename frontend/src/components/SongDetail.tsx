@@ -1,5 +1,6 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useAudioStore } from '../store/audio';
+import { AddToPlaylist } from './AddToPlaylist';
 
 export const SongDetail: React.FC = () => {
   const {
@@ -12,6 +13,7 @@ export const SongDetail: React.FC = () => {
     fetchSongHistory,
     setCurrentSongId,
   } = useAudioStore();
+  const [showAddToPlaylist, setShowAddToPlaylist] = useState(false);
 
   useEffect(() => {
     if (currentSongId) {
@@ -143,12 +145,27 @@ export const SongDetail: React.FC = () => {
             <div style={{ fontSize: '16px', color: '#666', marginBottom: '12px' }}>
               {currentSong.artist || '未知艺术家'}
             </div>
-            <div style={{ display: 'flex', gap: '16px', fontSize: '13px', color: '#888' }}>
+            <div style={{ display: 'flex', gap: '16px', fontSize: '13px', color: '#888', marginBottom: '16px' }}>
               <span>⏱️ 时长: {formatDuration(currentSong.duration_sec)}</span>
               {currentSong.created_at && (
                 <span>📅 入库: {formatTime(currentSong.created_at)}</span>
               )}
             </div>
+            <button
+              onClick={() => setShowAddToPlaylist(true)}
+              style={{
+                padding: '8px 20px',
+                border: 'none',
+                background: '#ff9800',
+                color: '#fff',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontSize: '14px',
+                fontWeight: 500,
+              }}
+            >
+              ⭐ 收藏到歌单
+            </button>
           </div>
         </div>
       </div>
@@ -276,6 +293,13 @@ export const SongDetail: React.FC = () => {
           </div>
         )}
       </div>
+      {showAddToPlaylist && currentSong && (
+        <AddToPlaylist
+          songId={currentSong.id}
+          songTitle={currentSong.title}
+          onClose={() => setShowAddToPlaylist(false)}
+        />
+      )}
     </div>
   );
 };

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import axios from 'axios';
-import { Song, RecognizeResult, UploadSongResponse, RecognitionHistoryItem, BatchUploadProgress, BatchUploadResult, DeleteSongResponse, FailedSample, FailedSamplesResponse, PromoteSampleRequest, PromoteSampleResponse, SimilarSong, SimilarSongsResponse, CalibrationResult, CalibrationStatus, QualityLevel, CompareItem, CompareSlot, CompareResult } from '../types';
+import { Song, RecognizeResult, UploadSongResponse, RecognitionHistoryItem, BatchUploadProgress, BatchUploadResult, DeleteSongResponse, FailedSample, FailedSamplesResponse, PromoteSampleRequest, PromoteSampleResponse, SimilarSong, SimilarSongsResponse, CalibrationResult, CalibrationStatus, QualityLevel, CompareItem, CompareSlot, CompareResult, Playlist, PlaylistsResponse, PlaylistSongsResponse, PlaylistSongDetail, CreatePlaylistRequest, UpdatePlaylistRequest, AddSongToPlaylistRequest, SongPlaylistsResponse } from '../types';
 
 const API_BASE = 'http://127.0.0.1:8080/api';
 
@@ -75,6 +75,28 @@ interface AudioState {
   clearCompareSlot: (slot: CompareSlot) => void;
   clearCompareAll: () => void;
   calculateCompareResult: () => void;
+  playlists: Playlist[];
+  currentPlaylistId: string | null;
+  currentPlaylist: Playlist | null;
+  currentPlaylistSongs: PlaylistSongDetail[];
+  isFetchingPlaylists: boolean;
+  isFetchingPlaylistSongs: boolean;
+  isCreatingPlaylist: boolean;
+  isUpdatingPlaylist: boolean;
+  isDeletingPlaylist: boolean;
+  isAddingSongToPlaylist: boolean;
+  isRemovingSongFromPlaylist: boolean;
+  playlistError: string | null;
+  fetchPlaylists: () => Promise<void>;
+  createPlaylist: (name: string, description?: string | null) => Promise<boolean>;
+  fetchPlaylistDetail: (playlistId: string) => Promise<void>;
+  fetchPlaylistSongs: (playlistId: string) => Promise<void>;
+  updatePlaylist: (playlistId: string, name: string, description?: string | null) => Promise<boolean>;
+  deletePlaylist: (playlistId: string) => Promise<boolean>;
+  addSongToPlaylist: (playlistId: string, songId: string) => Promise<boolean>;
+  removeSongFromPlaylist: (playlistId: string, songId: string) => Promise<boolean>;
+  setCurrentPlaylistId: (id: string | null) => void;
+  clearPlaylistError: () => void;
 }
 
 export const useAudioStore = create<AudioState>((set) => ({
@@ -133,6 +155,18 @@ export const useAudioStore = create<AudioState>((set) => ({
     error: null,
   },
   compareResult: null,
+  playlists: [],
+  currentPlaylistId: null,
+  currentPlaylist: null,
+  currentPlaylistSongs: [],
+  isFetchingPlaylists: false,
+  isFetchingPlaylistSongs: false,
+  isCreatingPlaylist: false,
+  isUpdatingPlaylist: false,
+  isDeletingPlaylist: false,
+  isAddingSongToPlaylist: false,
+  isRemovingSongFromPlaylist: false,
+  playlistError: null,
 
   fetchSongs: async () => {
     try {
@@ -698,4 +732,127 @@ export const useAudioStore = create<AudioState>((set) => ({
       },
     });
   },
+
+  fetchPlaylists: async () => {
+    set({ isFetchingPlaylists: true, playlistError: null });
+    try {
+      const response = await axios.get<PlaylistsResponse>(`${API_BASE}/playlists`);
+      set({ playlists: response.data.playlists, isFetchingPlaylists: false });
+    } catch (error: any) {
+      const message = error.response?.data?.message || error.message || 'Failed to fetch playlists';
+      set({ isFetchingPlaylists: false, playlistError: message });
+    }
+  },
+
+  createPlaylist: async (name: string, description?: string | null) => {
+    set({ isCreatingPlaylist: true, playlistError: null });
+    try {
+      const body: CreatePlaylistRequest = { name, description: description || null };
+      const response = await axios.post<Playlist>(`${API_BASE}/playlists`, body);
+      set((state) => ({
+        playlists: [response.data, ...state.playlists],
+        isCreatingPlaylist: false,
+      }));
+      return true;
+    } catch (error: any) {
+      const message = error.response?.data?.message || error.message || 'Failed to create playlist';
+      set({ isCreatingPlaylist: false, playlistError: message });
+      return false;
+    }
+  },
+
+  fetchPlaylistDetail: async (playlistId: string) => {
+    try {
+      const response = await axios.get<Playlist>(`${API_BASE}/playlists/${playlistId}`);
+      set({ currentPlaylist: response.data });
+    } catch (error) {
+      console.error('Failed to fetch playlist detail:', error);
+      set({ currentPlaylist: null });
+    }
+  },
+
+  fetchPlaylistSongs: async (playlistId: string) => {
+    set({ isFetchingPlaylistSongs: true });
+    try {
+      const response = await axios.get<PlaylistSongsResponse>(`${API_BASE}/playlists/${playlistId}/songs`);
+      set({ currentPlaylistSongs: response.data.songs, isFetchingPlaylistSongs: false });
+    } catch (error) {
+      console.error('Failed to fetch playlist songs:', error);
+      set({ currentPlaylistSongs: [], isFetchingPlaylistSongs: false });
+    }
+  },
+
+  updatePlaylist: async (playlistId: string, name: string, description?: string | null) => {
+    set({ isUpdatingPlaylist: true, playlistError: null });
+    try {
+      const body: UpdatePlaylistRequest = { name, description: description || null };
+      const response = await axios.put<Playlist>(`${API_BASE}/playlists/${playlistId}`, body);
+      set((state) => ({
+        playlists: state.playlists.map((p) =>
+          p.id === playlistId ? response.data : p
+        ),
+        currentPlaylist: response.data,
+        isUpdatingPlaylist: false,
+      }));
+      return true;
+    } catch (error: any) {
+      const message = error.response?.data?.message || error.message || 'Failed to update playlist';
+      set({ isUpdatingPlaylist: false, playlistError: message });
+      return false;
+    }
+  },
+
+  deletePlaylist: async (playlistId: string) => {
+    set({ isDeletingPlaylist: true, playlistError: null });
+    try {
+      await axios.delete(`${API_BASE}/playlists/${playlistId}`);
+      set((state) => ({
+        playlists: state.playlists.filter((p) => p.id !== playlistId),
+        currentPlaylistId: state.currentPlaylistId === playlistId ? null : state.currentPlaylistId,
+        currentPlaylist: state.currentPlaylist?.id === playlistId ? null : state.currentPlaylist,
+        currentPlaylistSongs: state.currentPlaylist?.id === playlistId ? [] : state.currentPlaylistSongs,
+        isDeletingPlaylist: false,
+      }));
+      return true;
+    } catch (error: any) {
+      const message = error.response?.data?.message || error.message || 'Failed to delete playlist';
+      set({ isDeletingPlaylist: false, playlistError: message });
+      return false;
+    }
+  },
+
+  addSongToPlaylist: async (playlistId: string, songId: string) => {
+    set({ isAddingSongToPlaylist: true, playlistError: null });
+    try {
+      const body: AddSongToPlaylistRequest = { song_id: songId };
+      await axios.post(`${API_BASE}/playlists/${playlistId}/songs`, body);
+      set({ isAddingSongToPlaylist: false });
+      return true;
+    } catch (error: any) {
+      const message = error.response?.data?.message || error.message || 'Failed to add song to playlist';
+      set({ isAddingSongToPlaylist: false, playlistError: message });
+      return false;
+    }
+  },
+
+  removeSongFromPlaylist: async (playlistId: string, songId: string) => {
+    set({ isRemovingSongFromPlaylist: true, playlistError: null });
+    try {
+      await axios.delete(`${API_BASE}/playlists/${playlistId}/songs/${songId}`);
+      set((state) => ({
+        currentPlaylistSongs: state.currentPlaylistSongs.filter((s) => s.song_id !== songId),
+        isRemovingSongFromPlaylist: false,
+      }));
+      return true;
+    } catch (error: any) {
+      const message = error.response?.data?.message || error.message || 'Failed to remove song from playlist';
+      set({ isRemovingSongFromPlaylist: false, playlistError: message });
+      return false;
+    }
+  },
+
+  setCurrentPlaylistId: (id: string | null) =>
+    set({ currentPlaylistId: id, currentPlaylist: null, currentPlaylistSongs: [] }),
+
+  clearPlaylistError: () => set({ playlistError: null }),
 }));
