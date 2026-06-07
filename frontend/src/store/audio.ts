@@ -16,10 +16,18 @@ interface AudioState {
   uploadSuccess: UploadSongResponse | null;
   history: RecognitionHistoryItem[];
   isFetchingHistory: boolean;
+  currentSongId: string | null;
+  currentSong: Song | null;
+  currentSongHistory: RecognitionHistoryItem[];
+  isFetchingSongDetail: boolean;
+  isFetchingSongHistory: boolean;
   fetchSongs: () => Promise<void>;
   uploadSong: (title: string, artist: string, file: File) => Promise<boolean>;
   recognizeFile: (file: File) => Promise<boolean>;
   fetchHistory: () => Promise<void>;
+  fetchSongDetail: (songId: string) => Promise<void>;
+  fetchSongHistory: (songId: string) => Promise<void>;
+  setCurrentSongId: (id: string | null) => void;
   setSongs: (songs: Song[]) => void;
   setRecognizeResult: (r: RecognizeResult | null) => void;
   setRecording: (v: boolean) => void;
@@ -40,6 +48,11 @@ export const useAudioStore = create<AudioState>((set) => ({
   uploadSuccess: null,
   history: [],
   isFetchingHistory: false,
+  currentSongId: null,
+  currentSong: null,
+  currentSongHistory: [],
+  isFetchingSongDetail: false,
+  isFetchingSongHistory: false,
 
   fetchSongs: async () => {
     try {
@@ -113,4 +126,28 @@ export const useAudioStore = create<AudioState>((set) => ({
       set({ isFetchingHistory: false });
     }
   },
+
+  fetchSongDetail: async (songId: string) => {
+    set({ isFetchingSongDetail: true });
+    try {
+      const response = await axios.get<Song>(`${API_BASE}/songs/${songId}`);
+      set({ currentSong: response.data, isFetchingSongDetail: false });
+    } catch (error) {
+      console.error('Failed to fetch song detail:', error);
+      set({ currentSong: null, isFetchingSongDetail: false });
+    }
+  },
+
+  fetchSongHistory: async (songId: string) => {
+    set({ isFetchingSongHistory: true });
+    try {
+      const response = await axios.get<RecognitionHistoryItem[]>(`${API_BASE}/songs/${songId}/history`);
+      set({ currentSongHistory: response.data, isFetchingSongHistory: false });
+    } catch (error) {
+      console.error('Failed to fetch song history:', error);
+      set({ currentSongHistory: [], isFetchingSongHistory: false });
+    }
+  },
+
+  setCurrentSongId: (id: string | null) => set({ currentSongId: id, currentSong: null, currentSongHistory: [] }),
 }));

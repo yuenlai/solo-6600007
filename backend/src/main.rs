@@ -217,6 +217,36 @@ async fn get_history(pool: web::Data<SqlitePool>) -> HttpResponse {
     }
 }
 
+async fn get_song_detail(
+    song_id: web::Path<String>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    match database::get_song_by_id(&pool, &song_id).await {
+        Ok(Some(song)) => HttpResponse::Ok().json(song),
+        Ok(None) => HttpResponse::NotFound().json(ErrorResponse {
+            error: "song_not_found".to_string(),
+            message: "Song not found".to_string(),
+        }),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch song: {}", e),
+        }),
+    }
+}
+
+async fn get_song_history(
+    song_id: web::Path<String>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    match database::get_recognition_history_by_song_id(&pool, &song_id, 50).await {
+        Ok(history) => HttpResponse::Ok().json(history),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch song history: {}", e),
+        }),
+    }
+}
+
 async fn upload_song(
     mut payload: Multipart,
     pool: web::Data<SqlitePool>,
@@ -343,6 +373,8 @@ async fn main() -> std::io::Result<()> {
             .route("/api/recognize", web::post().to(recognize_audio))
             .route("/api/songs", web::get().to(list_songs))
             .route("/api/songs/upload", web::post().to(upload_song))
+            .route("/api/songs/{id}", web::get().to(get_song_detail))
+            .route("/api/songs/{id}/history", web::get().to(get_song_history))
             .route("/api/history", web::get().to(get_history))
     }).bind("127.0.0.1:8080")?.run().await
 }

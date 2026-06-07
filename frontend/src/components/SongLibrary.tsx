@@ -4,7 +4,7 @@ import { useAudioStore } from '../store/audio';
 import { SongUploader } from './SongUploader';
 
 export const SongLibrary: React.FC = () => {
-  const { songs, fetchSongs } = useAudioStore();
+  const { songs, fetchSongs, setCurrentSongId } = useAudioStore();
 
   useEffect(() => {
     fetchSongs();
@@ -51,11 +51,23 @@ export const SongLibrary: React.FC = () => {
           </div>
         ) : (
           songs.map(s => (
-            <div key={s.id} style={{
-              display: 'flex', alignItems: 'center', gap: '12px', padding: '12px',
-              marginBottom: '8px', borderRadius: '8px', border: '1px solid #e0e0e0',
-              background: '#fff',
-            }}>
+            <div
+              key={s.id}
+              onClick={() => setCurrentSongId(s.id)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: '12px', padding: '12px',
+                marginBottom: '8px', borderRadius: '8px', border: '1px solid #e0e0e0',
+                background: '#fff', cursor: 'pointer', transition: 'all 0.2s',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = '#f5f5f5';
+                e.currentTarget.style.borderColor = '#bdbdbd';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = '#fff';
+                e.currentTarget.style.borderColor = '#e0e0e0';
+              }}
+            >
               <div style={{
                 width: '40px', height: '40px', borderRadius: '8px', background: '#e8eaf6',
                 display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px',

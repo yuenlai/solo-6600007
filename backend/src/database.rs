@@ -157,3 +157,14 @@ pub async fn get_recognition_history(pool: &SqlitePool, limit: i32) -> Result<Ve
     .await?;
     Ok(history)
 }
+
+pub async fn get_recognition_history_by_song_id(pool: &SqlitePool, song_id: &str, limit: i32) -> Result<Vec<RecognitionHistory>, sqlx::Error> {
+    let history = sqlx::query_as::<_, RecognitionHistory>(
+        "SELECT id, match_found, song_id, song_title, song_artist, confidence, processing_time_ms, created_at FROM recognition_history WHERE song_id = ? ORDER BY created_at DESC LIMIT ?"
+    )
+    .bind(song_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(history)
+}
