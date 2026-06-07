@@ -189,3 +189,24 @@ export interface SongPlaylistsResponse {
   total: number;
   playlist_ids: string[];
 }
+
+export type OfflineDraftStatus = 'pending' | 'syncing' | 'synced' | 'failed';
+
+export interface OfflineRecognitionDraft {
+  id: string;
+  file_name: string;
+  file_size: number;
+  file_type: string;
+  audio_data: string;
+  created_at: string;
+  status: OfflineDraftStatus;
+  retry_count: number;
+  last_error?: string | null;
+  result?: RecognizeResult | null;
+  synced_at?: string | null;
+}
+
+export interface OfflineDraftsResponse {
+  total: number;
+  drafts: OfflineRecognitionDraft[];
+}

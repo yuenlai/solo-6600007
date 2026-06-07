@@ -1,10 +1,11 @@
 import { create } from 'zustand';
 import axios from 'axios';
-import { Song, RecognizeResult, UploadSongResponse, RecognitionHistoryItem, BatchUploadProgress, BatchUploadResult, DeleteSongResponse, FailedSample, FailedSamplesResponse, PromoteSampleRequest, PromoteSampleResponse, SimilarSong, SimilarSongsResponse, CalibrationResult, CalibrationStatus, QualityLevel, CompareItem, CompareSlot, CompareResult, Playlist, PlaylistsResponse, PlaylistSongsResponse, PlaylistSongDetail, CreatePlaylistRequest, UpdatePlaylistRequest, AddSongToPlaylistRequest, SongPlaylistsResponse } from '../types';
+import { Song, RecognizeResult, UploadSongResponse, RecognitionHistoryItem, BatchUploadProgress, BatchUploadResult, DeleteSongResponse, FailedSample, FailedSamplesResponse, PromoteSampleRequest, PromoteSampleResponse, SimilarSong, SimilarSongsResponse, CalibrationResult, CalibrationStatus, QualityLevel, CompareItem, CompareSlot, CompareResult, Playlist, PlaylistsResponse, PlaylistSongsResponse, PlaylistSongDetail, CreatePlaylistRequest, UpdatePlaylistRequest, AddSongToPlaylistRequest, SongPlaylistsResponse, OfflineRecognitionDraft, OfflineDraftStatus } from '../types';
 
 const API_BASE = 'http://127.0.0.1:8080/api';
 
 const ONBOARDING_KEY = 'audioid_onboarding_completed';
+const OFFLINE_DRAFTS_KEY = 'audioid_offline_drafts';
 
 interface AudioState {
   songs: Song[];
@@ -103,6 +104,18 @@ interface AudioState {
   checkOnboardingStatus: () => void;
   resetOnboarding: () => void;
   completeOnboarding: () => void;
+  isOnline: boolean;
+  offlineDrafts: OfflineRecognitionDraft[];
+  isSyncingDrafts: boolean;
+  syncError: string | null;
+  setOnlineStatus: (online: boolean) => void;
+  loadOfflineDrafts: () => void;
+  saveOfflineDraft: (file: File) => Promise<string>;
+  updateDraftStatus: (id: string, status: OfflineDraftStatus, error?: string | null, result?: RecognizeResult | null) => void;
+  deleteOfflineDraft: (id: string) => void;
+  clearSyncedDrafts: () => void;
+  syncOfflineDrafts: () => Promise<{ success: number; failed: number }>;
+  syncSingleDraft: (id: string) => Promise<boolean>;
 }
 
 export const useAudioStore = create<AudioState>((set) => ({
@@ -174,6 +187,147 @@ export const useAudioStore = create<AudioState>((set) => ({
   isAddingSongToPlaylist: false,
   isRemovingSongFromPlaylist: false,
   playlistError: null,
+  isOnline: typeof navigator !== 'undefined' ? navigator.onLine : true,
+  offlineDrafts: [],
+  isSyncingDrafts: false,
+  syncError: null,
+
+  setOnlineStatus: (online) => set({ isOnline: online }),
+
+  loadOfflineDrafts: () => {
+    try {
+      const stored = localStorage.getItem(OFFLINE_DRAFTS_KEY);
+      if (stored) {
+        const drafts = JSON.parse(stored) as OfflineRecognitionDraft[];
+        set({ offlineDrafts: drafts });
+      }
+    } catch (error) {
+      console.error('Failed to load offline drafts:', error);
+    }
+  },
+
+  saveOfflineDraft: async (file: File) => {
+    const id = crypto.randomUUID ? crypto.randomUUID() : Date.now().toString() + Math.random().toString(36).substr(2, 9);
+    const audioData = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+
+    const draft: OfflineRecognitionDraft = {
+      id,
+      file_name: file.name,
+      file_size: file.size,
+      file_type: file.type || 'audio/wav',
+      audio_data: audioData,
+      created_at: new Date().toISOString(),
+      status: 'pending',
+      retry_count: 0,
+      last_error: null,
+      result: null,
+      synced_at: null,
+    };
+
+    set((state) => {
+      const newDrafts = [draft, ...state.offlineDrafts];
+      localStorage.setItem(OFFLINE_DRAFTS_KEY, JSON.stringify(newDrafts));
+      return { offlineDrafts: newDrafts };
+    });
+
+    return id;
+  },
+
+  updateDraftStatus: (id, status, error = null, result = null) => {
+    set((state) => {
+      const newDrafts = state.offlineDrafts.map((d) =>
+        d.id === id
+          ? {
+              ...d,
+              status,
+              last_error: error,
+              result: result || d.result,
+              synced_at: status === 'synced' ? new Date().toISOString() : d.synced_at,
+              retry_count: status === 'failed' ? d.retry_count + 1 : d.retry_count,
+            }
+          : d
+      );
+      localStorage.setItem(OFFLINE_DRAFTS_KEY, JSON.stringify(newDrafts));
+      return { offlineDrafts: newDrafts };
+    });
+  },
+
+  deleteOfflineDraft: (id) => {
+    set((state) => {
+      const newDrafts = state.offlineDrafts.filter((d) => d.id !== id);
+      localStorage.setItem(OFFLINE_DRAFTS_KEY, JSON.stringify(newDrafts));
+      return { offlineDrafts: newDrafts };
+    });
+  },
+
+  clearSyncedDrafts: () => {
+    set((state) => {
+      const newDrafts = state.offlineDrafts.filter((d) => d.status !== 'synced');
+      localStorage.setItem(OFFLINE_DRAFTS_KEY, JSON.stringify(newDrafts));
+      return { offlineDrafts: newDrafts };
+    });
+  },
+
+  syncSingleDraft: async (id) => {
+    const state = useAudioStore.getState();
+    const draft = state.offlineDrafts.find((d) => d.id === id);
+    if (!draft) return false;
+
+    state.updateDraftStatus(id, 'syncing');
+
+    try {
+      const response = await fetch(draft.audio_data);
+      const blob = await response.blob();
+      const file = new File([blob], draft.file_name, { type: draft.file_type });
+
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const result = await axios.post<RecognizeResult>(
+        `${API_BASE}/recognize`,
+        formData,
+        { headers: { 'Content-Type': 'multipart/form-data' } }
+      );
+
+      state.updateDraftStatus(id, 'synced', null, result.data);
+      state.fetchHistory();
+      return true;
+    } catch (error: any) {
+      const message = error.response?.data?.message || error.message || 'Sync failed';
+      state.updateDraftStatus(id, 'failed', message);
+      return false;
+    }
+  },
+
+  syncOfflineDrafts: async () => {
+    const state = useAudioStore.getState();
+    const pendingDrafts = state.offlineDrafts.filter(
+      (d) => d.status === 'pending' || d.status === 'failed'
+    );
+
+    if (pendingDrafts.length === 0) {
+      return { success: 0, failed: 0 };
+    }
+
+    set({ isSyncingDrafts: true, syncError: null });
+
+    let success = 0;
+    let failed = 0;
+
+    for (const draft of pendingDrafts) {
+      const ok = await state.syncSingleDraft(draft.id);
+      if (ok) success++;
+      else failed++;
+    }
+
+    set({ isSyncingDrafts: false });
+    return { success, failed };
+  },
 
   fetchSongs: async () => {
     try {
@@ -289,8 +443,18 @@ export const useAudioStore = create<AudioState>((set) => ({
       set({ isRecognizing: false, recognizeResult: response.data });
       return true;
     } catch (error: any) {
+      const isNetworkError = !error.response || error.code === 'ERR_NETWORK' || error.message.includes('Network');
       const message = error.response?.data?.message || error.message || 'Recognition failed';
-      set({ isRecognizing: false, recognizeError: message });
+
+      if (isNetworkError) {
+        const draftId = await useAudioStore.getState().saveOfflineDraft(file);
+        set({ 
+          isRecognizing: false, 
+          recognizeError: `${message}（已保存为离线草稿，网络恢复后将自动补交）` 
+        });
+      } else {
+        set({ isRecognizing: false, recognizeError: message });
+      }
       return false;
     }
   },

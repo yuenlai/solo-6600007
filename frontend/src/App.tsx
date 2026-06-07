@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Recorder } from './components/Recorder';
 import { CompareRecorder } from './components/CompareRecorder';
 import { SongLibrary } from './components/SongLibrary';
@@ -9,21 +9,94 @@ import { FailedSamples } from './components/FailedSamples';
 import { PlaylistManager } from './components/PlaylistManager';
 import { AddToPlaylist } from './components/AddToPlaylist';
 import { OnboardingGuide } from './components/OnboardingGuide';
+import { OfflineDrafts } from './components/OfflineDrafts';
 import { useAudioStore } from './store/audio';
 
 const App: React.FC = () => {
-  const [tab, setTab] = useState<'recognize' | 'compare' | 'library' | 'queue' | 'history' | 'failed' | 'playlists'>('recognize');
-  const { recognizeResult, currentSongId, setCurrentSongId, pendingSongs, failedSamples, currentPlaylistId } = useAudioStore();
+  const [tab, setTab] = useState<'recognize' | 'compare' | 'library' | 'queue' | 'history' | 'failed' | 'playlists' | 'drafts'>('recognize');
+  const { 
+    recognizeResult, 
+    currentSongId, 
+    setCurrentSongId, 
+    pendingSongs, 
+    failedSamples, 
+    currentPlaylistId,
+    isOnline,
+    setOnlineStatus,
+    loadOfflineDrafts,
+    offlineDrafts,
+    syncOfflineDrafts,
+  } = useAudioStore();
   const [showAddToPlaylist, setShowAddToPlaylist] = useState(false);
   const [addToPlaylistSong, setAddToPlaylistSong] = useState<{ id: string; title: string } | null>(null);
 
   const pendingCount = pendingSongs.length;
   const failedCount = failedSamples.length;
+  const draftsCount = offlineDrafts.filter(d => d.status === 'pending' || d.status === 'failed').length;
+
+  useEffect(() => {
+    loadOfflineDrafts();
+  }, [loadOfflineDrafts]);
+
+  useEffect(() => {
+    const handleOnline = async () => {
+      setOnlineStatus(true);
+      const pendingDrafts = offlineDrafts.filter(d => d.status === 'pending' || d.status === 'failed');
+      if (pendingDrafts.length > 0) {
+        await syncOfflineDrafts();
+      }
+    };
+    const handleOffline = () => setOnlineStatus(false);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [setOnlineStatus, offlineDrafts, syncOfflineDrafts]);
 
   return (
     <div style={{ display: 'flex', height: '100vh', fontFamily: 'sans-serif' }}>
-      <nav style={{ width: '200px', background: '#0d1b2a', color: '#fff', padding: '20px 0' }}>
+      <nav style={{ width: '200px', background: '#0d1b2a', color: '#fff', padding: '20px 0', display: 'flex', flexDirection: 'column' }}>
         <h2 style={{ margin: '0 0 20px', padding: '0 16px', fontSize: '15px' }}>🎵 AudioID</h2>
+        
+        {!isOnline && (
+          <div style={{
+            margin: '0 16px 16px',
+            padding: '8px 12px',
+            background: '#e65100',
+            borderRadius: '6px',
+            fontSize: '12px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+          }}>
+            <span>📡</span>
+            <span>网络已断开</span>
+          </div>
+        )}
+        
+        {draftsCount > 0 && (
+          <div style={{
+            margin: '0 16px 16px',
+            padding: '8px 12px',
+            background: '#1565c0',
+            borderRadius: '6px',
+            fontSize: '12px',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+          }}
+          onClick={() => setTab('drafts')}
+          >
+            <span>📝</span>
+            <span>{draftsCount} 条待补交</span>
+          </div>
+        )}
+
         {[
           { key: 'recognize', label: '🎤 识别', onboarding: 'recognize' },
           { key: 'compare', label: '🔄 对比识别' },
@@ -31,6 +104,7 @@ const App: React.FC = () => {
           { key: 'playlists', label: '🎵 歌单收藏' },
           { key: 'queue', label: `⏳ 待处理${pendingCount > 0 ? ` (${pendingCount})` : ''}` },
           { key: 'failed', label: `🗑️ 失败样本${failedCount > 0 ? ` (${failedCount})` : ''}` },
+          { key: 'drafts', label: `📝 离线草稿${draftsCount > 0 ? ` (${draftsCount})` : ''}` },
           { key: 'history', label: '📋 历史', onboarding: 'history' },
         ].map(t => (
           <button
@@ -151,6 +225,7 @@ const App: React.FC = () => {
             {tab === 'library' && <SongLibrary />}
             {tab === 'queue' && <PendingQueue />}
             {tab === 'failed' && <FailedSamples />}
+            {tab === 'drafts' && <OfflineDrafts />}
             {tab === 'history' && <RecognitionHistory />}
           </>
         )}
