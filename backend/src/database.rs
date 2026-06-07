@@ -14,6 +14,8 @@ pub struct Song {
     pub created_at: String,
     #[sqlx(default)]
     pub audio_sample: Option<Vec<u8>>,
+    #[sqlx(default)]
+    pub status: String,
 }
 
 pub async fn create_pool() -> SqlitePool {
@@ -30,7 +32,8 @@ pub async fn init_db(pool: &SqlitePool) {
             fingerprint_robust TEXT,
             duration_sec INTEGER,
             created_at TEXT DEFAULT (datetime('now')),
-            audio_sample BLOB
+            audio_sample BLOB,
+            status TEXT DEFAULT 'completed'
         )
     "#).execute(pool).await.expect("Failed to init db");
     
@@ -45,6 +48,10 @@ pub async fn init_db(pool: &SqlitePool) {
     sqlx::query(r#"
         ALTER TABLE songs ADD COLUMN IF NOT EXISTS audio_sample BLOB
     "#).execute(pool).await.ok();
+    
+    sqlx::query(r#"
+        ALTER TABLE songs ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'completed'
+    "#).execute(pool).await.ok();
 }
 
 pub async fn insert_song(
@@ -57,10 +64,12 @@ pub async fn insert_song(
     fingerprint_robust: Option<&str>,
     duration_sec: Option<i64>,
     audio_sample: Option<&[u8]>,
+    status: Option<&str>,
 ) -> Result<(), sqlx::Error> {
     let now = Utc::now().to_rfc3339();
+    let status_val = status.unwrap_or("completed");
     sqlx::query(
-        "INSERT INTO songs (id, title, artist, fingerprint_hash, fingerprint_peaks, fingerprint_robust, duration_sec, created_at, audio_sample) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO songs (id, title, artist, fingerprint_hash, fingerprint_peaks, fingerprint_robust, duration_sec, created_at, audio_sample, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(id)
     .bind(title)
@@ -71,6 +80,7 @@ pub async fn insert_song(
     .bind(duration_sec)
     .bind(now)
     .bind(audio_sample)
+    .bind(status_val)
     .execute(pool)
     .await?;
     Ok(())
@@ -78,7 +88,7 @@ pub async fn insert_song(
 
 pub async fn get_all_songs(pool: &SqlitePool) -> Result<Vec<Song>, sqlx::Error> {
     let songs = sqlx::query_as::<_, Song>(
-        "SELECT id, title, artist, fingerprint_hash, fingerprint_peaks, fingerprint_robust, duration_sec, created_at FROM songs ORDER BY created_at DESC"
+        "SELECT id, title, artist, fingerprint_hash, fingerprint_peaks, fingerprint_robust, duration_sec, created_at, status FROM songs ORDER BY created_at DESC"
     )
     .fetch_all(pool)
     .await?;
@@ -87,12 +97,30 @@ pub async fn get_all_songs(pool: &SqlitePool) -> Result<Vec<Song>, sqlx::Error> 
 
 pub async fn get_song_by_id(pool: &SqlitePool, id: &str) -> Result<Option<Song>, sqlx::Error> {
     let song = sqlx::query_as::<_, Song>(
-        "SELECT id, title, artist, fingerprint_hash, fingerprint_peaks, fingerprint_robust, duration_sec, created_at FROM songs WHERE id = ?"
+        "SELECT id, title, artist, fingerprint_hash, fingerprint_peaks, fingerprint_robust, duration_sec, created_at, status FROM songs WHERE id = ?"
     )
     .bind(id)
     .fetch_optional(pool)
     .await?;
     Ok(song)
+}
+
+pub async fn get_pending_songs(pool: &SqlitePool) -> Result<Vec<Song>, sqlx::Error> {
+    let songs = sqlx::query_as::<_, Song>(
+        "SELECT id, title, artist, fingerprint_hash, fingerprint_peaks, fingerprint_robust, duration_sec, created_at, status FROM songs WHERE status IN ('pending', 'processing') ORDER BY created_at DESC"
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(songs)
+}
+
+pub async fn update_song_status(pool: &SqlitePool, id: &str, status: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE songs SET status = ? WHERE id = ?")
+        .bind(status)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 pub async fn get_song_audio_sample(pool: &SqlitePool, id: &str) -> Result<Option<Vec<u8>>, sqlx::Error> {

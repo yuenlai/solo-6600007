@@ -1,3 +1,5 @@
+export type SongStatus = 'pending' | 'processing' | 'completed' | 'failed';
+
 export interface Song {
   id: string;
   title: string;
@@ -7,6 +9,7 @@ export interface Song {
   fingerprint_robust?: string | null;
   duration_sec: number | null;
   created_at?: string;
+  status?: SongStatus;
 }
 
 export interface RecognizeResult {

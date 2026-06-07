@@ -6,6 +6,7 @@ const API_BASE = 'http://127.0.0.1:8080/api';
 
 interface AudioState {
   songs: Song[];
+  pendingSongs: Song[];
   recognizeResult: RecognizeResult | null;
   isRecording: boolean;
   audioLevel: number;
@@ -16,6 +17,7 @@ interface AudioState {
   uploadSuccess: UploadSongResponse | null;
   history: RecognitionHistoryItem[];
   isFetchingHistory: boolean;
+  isFetchingPendingSongs: boolean;
   currentSongId: string | null;
   currentSong: Song | null;
   currentSongHistory: RecognitionHistoryItem[];
@@ -28,6 +30,7 @@ interface AudioState {
   isDeletingSong: boolean;
   deleteSongError: string | null;
   fetchSongs: () => Promise<void>;
+  fetchPendingSongs: () => Promise<void>;
   uploadSong: (title: string, artist: string, file: File) => Promise<boolean>;
   batchUploadSongs: (files: File[], defaultArtist?: string) => Promise<boolean>;
   recognizeFile: (file: File) => Promise<boolean>;
@@ -48,6 +51,7 @@ interface AudioState {
 
 export const useAudioStore = create<AudioState>((set) => ({
   songs: [],
+  pendingSongs: [],
   recognizeResult: null,
   isRecording: false,
   audioLevel: 0,
@@ -58,6 +62,7 @@ export const useAudioStore = create<AudioState>((set) => ({
   uploadSuccess: null,
   history: [],
   isFetchingHistory: false,
+  isFetchingPendingSongs: false,
   currentSongId: null,
   currentSong: null,
   currentSongHistory: [],
@@ -76,6 +81,17 @@ export const useAudioStore = create<AudioState>((set) => ({
       set({ songs: response.data });
     } catch (error) {
       console.error('Failed to fetch songs:', error);
+    }
+  },
+
+  fetchPendingSongs: async () => {
+    set({ isFetchingPendingSongs: true });
+    try {
+      const response = await axios.get<Song[]>(`${API_BASE}/songs/pending`);
+      set({ pendingSongs: response.data, isFetchingPendingSongs: false });
+    } catch (error) {
+      console.error('Failed to fetch pending songs:', error);
+      set({ isFetchingPendingSongs: false });
     }
   },
 

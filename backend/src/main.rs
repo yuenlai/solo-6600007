@@ -11,7 +11,7 @@ use std::fmt;
 mod fingerprint;
 mod database;
 
-use database::{Song, RecognitionHistory, RankedSong, TrendingSong};
+use database::{Song, RecognitionHistory, RankedSong, TrendingSong, get_pending_songs};
 
 #[derive(Serialize)]
 struct HealthResponse { status: String, service: String }
@@ -240,6 +240,16 @@ async fn list_songs(pool: web::Data<SqlitePool>) -> HttpResponse {
     }
 }
 
+async fn list_pending_songs(pool: web::Data<SqlitePool>) -> HttpResponse {
+    match get_pending_songs(&pool).await {
+        Ok(songs) => HttpResponse::Ok().json(songs),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch pending songs: {}", e),
+        }),
+    }
+}
+
 async fn get_history(pool: web::Data<SqlitePool>) -> HttpResponse {
     match database::get_recognition_history(&pool, 100).await {
         Ok(history) => HttpResponse::Ok().json(history),
@@ -457,6 +467,7 @@ async fn upload_song(
         robust_json.as_deref(),
         Some(duration_sec),
         audio_sample.as_deref(),
+        Some("completed"),
     ).await {
         Ok(_) => {
             Ok(HttpResponse::Ok().json(UploadResponse {
@@ -599,6 +610,7 @@ async fn batch_upload_songs(
             robust_json.as_deref(),
             Some(duration_sec),
             audio_sample.as_deref(),
+            Some("completed"),
         ).await {
             Ok(_) => {
                 progress.status = "completed".to_string();
@@ -651,6 +663,7 @@ async fn main() -> std::io::Result<()> {
             .route("/api/health", web::get().to(health))
             .route("/api/recognize", web::post().to(recognize_audio))
             .route("/api/songs", web::get().to(list_songs))
+            .route("/api/songs/pending", web::get().to(list_pending_songs))
             .route("/api/songs/upload", web::post().to(upload_song))
             .route("/api/songs/batch-upload", web::post().to(batch_upload_songs))
             .route("/api/songs/{id}", web::get().to(get_song_detail))

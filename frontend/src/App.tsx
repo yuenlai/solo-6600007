@@ -3,17 +3,25 @@ import { Recorder } from './components/Recorder';
 import { SongLibrary } from './components/SongLibrary';
 import { RecognitionHistory } from './components/RecognitionHistory';
 import { SongDetail } from './components/SongDetail';
+import { PendingQueue } from './components/PendingQueue';
 import { useAudioStore } from './store/audio';
 
 const App: React.FC = () => {
-  const [tab, setTab] = useState<'recognize' | 'library' | 'history'>('recognize');
-  const { recognizeResult, currentSongId, setCurrentSongId } = useAudioStore();
+  const [tab, setTab] = useState<'recognize' | 'library' | 'queue' | 'history'>('recognize');
+  const { recognizeResult, currentSongId, setCurrentSongId, pendingSongs } = useAudioStore();
+
+  const pendingCount = pendingSongs.length;
 
   return (
     <div style={{ display: 'flex', height: '100vh', fontFamily: 'sans-serif' }}>
       <nav style={{ width: '200px', background: '#0d1b2a', color: '#fff', padding: '20px 0' }}>
         <h2 style={{ margin: '0 0 20px', padding: '0 16px', fontSize: '15px' }}>🎵 AudioID</h2>
-        {[{ key: 'recognize', label: '🎤 识别' }, { key: 'library', label: '📚 指纹库' }, { key: 'history', label: '📋 历史' }].map(t => (
+        {[
+          { key: 'recognize', label: '🎤 识别' },
+          { key: 'library', label: '📚 指纹库' },
+          { key: 'queue', label: `⏳ 待处理${pendingCount > 0 ? ` (${pendingCount})` : ''}` },
+          { key: 'history', label: '📋 历史' },
+        ].map(t => (
           <button
             key={t.key}
             onClick={() => {
@@ -22,7 +30,8 @@ const App: React.FC = () => {
             }}
             style={{
               display: 'block', width: '100%', padding: '12px 16px', border: 'none', textAlign: 'left',
-              cursor: 'pointer', background: tab === t.key && !currentSongId ? 'rgba(255,255,255,0.1)' : 'transparent', color: '#fff'
+              cursor: 'pointer', background: tab === t.key && !currentSongId ? 'rgba(255,255,255,0.1)' : 'transparent', color: '#fff',
+              fontSize: '14px',
             }}
           >{t.label}</button>
         ))}
@@ -61,6 +70,7 @@ const App: React.FC = () => {
               </div>
             )}
             {tab === 'library' && <SongLibrary />}
+            {tab === 'queue' && <PendingQueue />}
             {tab === 'history' && <RecognitionHistory />}
           </>
         )}
