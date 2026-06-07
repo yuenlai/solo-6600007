@@ -1,6 +1,7 @@
 use sqlx::sqlite::{SqlitePoolOptions, SqlitePool};
 use serde::{Serialize, Deserialize};
 use chrono::Utc;
+use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Song {
@@ -1142,4 +1143,155 @@ pub async fn get_songs_by_any_tags(
     
     let songs = query_builder.fetch_all(pool).await?;
     Ok(songs)
+}
+
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow, Clone)]
+pub struct PracticeRecord {
+    pub id: String,
+    pub user_id: String,
+    pub practice_date: String,
+    pub total_practices: i64,
+    pub hit_count: i64,
+    pub miss_count: i64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct PracticeSummary {
+    pub total_days: i64,
+    pub total_practices: i64,
+    pub total_hits: i64,
+    pub total_misses: i64,
+    pub hit_rate: f64,
+}
+
+pub async fn init_practice_records_table(pool: &SqlitePool) {
+    sqlx::query(r#"
+        CREATE TABLE IF NOT EXISTS practice_records (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL DEFAULT 'default',
+            practice_date TEXT NOT NULL,
+            total_practices INTEGER NOT NULL DEFAULT 0,
+            hit_count INTEGER NOT NULL DEFAULT 0,
+            miss_count INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(user_id, practice_date)
+        )
+    "#).execute(pool).await.expect("Failed to init practice_records table");
+    
+    sqlx::query(r#"
+        CREATE INDEX IF NOT EXISTS idx_practice_records_date ON practice_records(practice_date)
+    "#).execute(pool).await.ok();
+    
+    sqlx::query(r#"
+        CREATE INDEX IF NOT EXISTS idx_practice_records_user_date ON practice_records(user_id, practice_date)
+    "#).execute(pool).await.ok();
+}
+
+pub async fn record_practice(
+    pool: &SqlitePool,
+    user_id: &str,
+    practice_date: &str,
+    is_hit: bool,
+) -> Result<(), sqlx::Error> {
+    let now = Utc::now().to_rfc3339();
+    let id = Uuid::new_v4().to_string();
+    
+    let hit_inc = if is_hit { 1 } else { 0 };
+    let miss_inc = if is_hit { 0 } else { 1 };
+    
+    sqlx::query(r#"
+        INSERT INTO practice_records (id, user_id, practice_date, total_practices, hit_count, miss_count, created_at, updated_at)
+        VALUES (?, ?, ?, 1, ?, ?, ?, ?)
+        ON CONFLICT(user_id, practice_date) DO UPDATE SET
+            total_practices = total_practices + 1,
+            hit_count = hit_count + ?,
+            miss_count = miss_count + ?,
+            updated_at = ?
+    "#)
+    .bind(id)
+    .bind(user_id)
+    .bind(practice_date)
+    .bind(hit_inc)
+    .bind(miss_inc)
+    .bind(now.clone())
+    .bind(now.clone())
+    .bind(hit_inc)
+    .bind(miss_inc)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_practice_record_by_date(
+    pool: &SqlitePool,
+    user_id: &str,
+    practice_date: &str,
+) -> Result<Option<PracticeRecord>, sqlx::Error> {
+    let record = sqlx::query_as::<_, PracticeRecord>(
+        "SELECT * FROM practice_records WHERE user_id = ? AND practice_date = ?"
+    )
+    .bind(user_id)
+    .bind(practice_date)
+    .fetch_optional(pool)
+    .await?;
+    Ok(record)
+}
+
+pub async fn get_practice_records_range(
+    pool: &SqlitePool,
+    user_id: &str,
+    start_date: &str,
+    end_date: &str,
+) -> Result<Vec<PracticeRecord>, sqlx::Error> {
+    let records = sqlx::query_as::<_, PracticeRecord>(
+        "SELECT * FROM practice_records WHERE user_id = ? AND practice_date BETWEEN ? AND ? ORDER BY practice_date DESC"
+    )
+    .bind(user_id)
+    .bind(start_date)
+    .bind(end_date)
+    .fetch_all(pool)
+    .await?;
+    Ok(records)
+}
+
+pub async fn get_recent_practice_records(
+    pool: &SqlitePool,
+    user_id: &str,
+    limit: i32,
+) -> Result<Vec<PracticeRecord>, sqlx::Error> {
+    let records = sqlx::query_as::<_, PracticeRecord>(
+        "SELECT * FROM practice_records WHERE user_id = ? ORDER BY practice_date DESC LIMIT ?"
+    )
+    .bind(user_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(records)
+}
+
+pub async fn get_practice_summary(
+    pool: &SqlitePool,
+    user_id: &str,
+) -> Result<PracticeSummary, sqlx::Error> {
+    let summary = sqlx::query_as::<_, PracticeSummary>(r#"
+        SELECT
+            COUNT(*) as total_days,
+            COALESCE(SUM(total_practices), 0) as total_practices,
+            COALESCE(SUM(hit_count), 0) as total_hits,
+            COALESCE(SUM(miss_count), 0) as total_misses,
+            CASE 
+                WHEN COALESCE(SUM(total_practices), 0) = 0 THEN 0.0
+                ELSE ROUND(COALESCE(SUM(hit_count), 0) * 100.0 / COALESCE(SUM(total_practices), 1), 2)
+            END as hit_rate
+        FROM practice_records
+        WHERE user_id = ?
+    "#)
+    .bind(user_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(summary)
 }

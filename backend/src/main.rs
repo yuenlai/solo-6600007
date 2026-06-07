@@ -11,7 +11,7 @@ use std::fmt;
 mod fingerprint;
 mod database;
 
-use database::{Song, RecognitionHistory, RankedSong, TrendingSong, FailedSample, SimilarSong, Playlist, PlaylistSongDetail, ReviewTask, Tag, get_pending_songs};
+use database::{Song, RecognitionHistory, RankedSong, TrendingSong, FailedSample, SimilarSong, Playlist, PlaylistSongDetail, ReviewTask, Tag, PracticeRecord, PracticeSummary, get_pending_songs};
 
 #[derive(Serialize)]
 struct HealthResponse { status: String, service: String }
@@ -201,6 +201,24 @@ struct BatchAddTagsRequest {
 struct SongsByTagsResponse {
     total: usize,
     songs: Vec<Song>,
+}
+
+#[derive(Deserialize)]
+struct RecordPracticeRequest {
+    user_id: Option<String>,
+    practice_date: Option<String>,
+    is_hit: bool,
+}
+
+#[derive(Serialize)]
+struct PracticeRecordsResponse {
+    total: usize,
+    records: Vec<PracticeRecord>,
+}
+
+#[derive(Serialize)]
+struct PracticeSummaryResponse {
+    summary: PracticeSummary,
 }
 
 fn convert_playlist(p: Playlist) -> PlaylistResponse {
@@ -1513,6 +1531,95 @@ async fn get_songs_by_tags(
     }
 }
 
+async fn record_practice(
+    body: web::Json<RecordPracticeRequest>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    let user_id = body.user_id.as_deref().unwrap_or("default");
+    let practice_date = body.practice_date.clone().unwrap_or_else(|| {
+        chrono::Utc::now().format("%Y-%m-%d").to_string()
+    });
+
+    match database::record_practice(&pool, user_id, &practice_date, body.is_hit).await {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({
+            "status": "success",
+            "message": "Practice recorded successfully"
+        })),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to record practice: {}", e),
+        }),
+    }
+}
+
+async fn get_practice_record(
+    query: web::Query<std::collections::HashMap<String, String>>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    let user_id = query.get("user_id").map(|s| s.as_str()).unwrap_or("default");
+    let default_date = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let practice_date = query.get("date")
+        .map(|s| s.as_str())
+        .unwrap_or(&default_date);
+
+    match database::get_practice_record_by_date(&pool, user_id, practice_date).await {
+        Ok(Some(record)) => HttpResponse::Ok().json(record),
+        Ok(None) => HttpResponse::Ok().json(serde_json::json!({
+            "user_id": user_id,
+            "practice_date": practice_date,
+            "total_practices": 0,
+            "hit_count": 0,
+            "miss_count": 0
+        })),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch practice record: {}", e),
+        }),
+    }
+}
+
+async fn get_practice_records(
+    query: web::Query<std::collections::HashMap<String, String>>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    let user_id = query.get("user_id").map(|s| s.as_str()).unwrap_or("default");
+    
+    let result = if let (Some(start_date), Some(end_date)) = (query.get("start_date"), query.get("end_date")) {
+        database::get_practice_records_range(&pool, user_id, start_date, end_date).await
+    } else {
+        let limit: i32 = query.get("limit")
+            .and_then(|l| l.parse().ok())
+            .unwrap_or(30);
+        database::get_recent_practice_records(&pool, user_id, limit).await
+    };
+
+    match result {
+        Ok(records) => HttpResponse::Ok().json(PracticeRecordsResponse {
+            total: records.len(),
+            records,
+        }),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch practice records: {}", e),
+        }),
+    }
+}
+
+async fn get_practice_summary(
+    query: web::Query<std::collections::HashMap<String, String>>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    let user_id = query.get("user_id").map(|s| s.as_str()).unwrap_or("default");
+
+    match database::get_practice_summary(&pool, user_id).await {
+        Ok(summary) => HttpResponse::Ok().json(PracticeSummaryResponse { summary }),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch practice summary: {}", e),
+        }),
+    }
+}
+
 async fn upload_song(
     mut payload: Multipart,
     pool: web::Data<SqlitePool>,
@@ -1798,6 +1905,7 @@ async fn main() -> std::io::Result<()> {
     database::init_playlists_tables(&pool).await;
     database::init_review_tasks_table(&pool).await;
     database::init_tags_tables(&pool).await;
+    database::init_practice_records_table(&pool).await;
     println!("Database initialized");
 
     HttpServer::new(move || {
@@ -1849,5 +1957,9 @@ async fn main() -> std::io::Result<()> {
             .route("/api/songs/{id}/tags/batch", web::post().to(batch_add_tags_to_song))
             .route("/api/songs/{song_id}/tags/{tag_id}", web::delete().to(remove_tag_from_song))
             .route("/api/songs/by-tags", web::get().to(get_songs_by_tags))
+            .route("/api/practice/record", web::post().to(record_practice))
+            .route("/api/practice/today", web::get().to(get_practice_record))
+            .route("/api/practice/records", web::get().to(get_practice_records))
+            .route("/api/practice/summary", web::get().to(get_practice_summary))
     }).bind("127.0.0.1:8080")?.run().await
 }
