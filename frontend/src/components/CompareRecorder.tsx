@@ -94,7 +94,27 @@ const CompareSlotCard: React.FC<{
     }
   };
 
+  const getMatchStatusLabel = (result: RecognizeResult) => {
+    if (result.match_found) {
+      if (result.confidence >= 0.6) return { label: '精确匹配', color: '#2e7d32' };
+      if (result.confidence >= 0.3) return { label: '可能匹配', color: '#f57c00' };
+      return { label: '低置信度', color: '#e65100' };
+    }
+    return { label: '未匹配', color: '#c62828' };
+  };
+
+  const getConfidenceLevel = (confidence: number) => {
+    if (confidence >= 0.8) return '极高';
+    if (confidence >= 0.6) return '高';
+    if (confidence >= 0.4) return '中';
+    if (confidence >= 0.2) return '低';
+    return '极低';
+  };
+
   const renderResult = (result: RecognizeResult) => {
+    const status = getMatchStatusLabel(result);
+    const confidenceLevel = getConfidenceLevel(result.confidence);
+    
     return (
       <div style={{
         padding: '12px',
@@ -107,6 +127,16 @@ const CompareSlotCard: React.FC<{
           <span style={{ fontWeight: 600, fontSize: '14px' }}>
             {result.match_found ? '识别成功' : '未找到匹配'}
           </span>
+          <span style={{
+            padding: '2px 8px',
+            borderRadius: '10px',
+            background: status.color + '20',
+            color: status.color,
+            fontWeight: 600,
+            fontSize: '11px',
+          }}>
+            {status.label}
+          </span>
         </div>
         {result.match_found && result.song ? (
           <>
@@ -117,8 +147,23 @@ const CompareSlotCard: React.FC<{
           <div style={{ fontSize: '12px', color: '#666' }}>未匹配到歌曲库中的音频</div>
         )}
         <div style={{ marginTop: '8px', fontSize: '11px', color: '#999' }}>
-          置信度: {(result.confidence * 100).toFixed(0)}% · 耗时: {result.processing_time_ms}ms
+          置信度: {(result.confidence * 100).toFixed(0)}% ({confidenceLevel}) · 耗时: {result.processing_time_ms}ms
         </div>
+        {result.match_found && (
+          <div style={{ 
+            marginTop: '8px', 
+            height: '4px', 
+            background: '#e0e0e0', 
+            borderRadius: '2px',
+            overflow: 'hidden'
+          }}>
+            <div style={{
+              height: '100%',
+              width: `${result.confidence * 100}%`,
+              background: result.confidence >= 0.6 ? '#4caf50' : result.confidence >= 0.3 ? '#ff9800' : '#ff5722',
+            }} />
+          </div>
+        )}
       </div>
     );
   };
