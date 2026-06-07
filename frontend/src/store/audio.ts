@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import axios from 'axios';
-import { Song, RecognizeResult, UploadSongResponse, RecognitionHistoryItem, BatchUploadProgress, BatchUploadResult, DeleteSongResponse, FailedSample, FailedSamplesResponse, PromoteSampleRequest, PromoteSampleResponse, SimilarSong, SimilarSongsResponse, CalibrationResult, CalibrationStatus, QualityLevel, CompareItem, CompareSlot, CompareResult, Playlist, PlaylistsResponse, PlaylistSongsResponse, PlaylistSongDetail, CreatePlaylistRequest, UpdatePlaylistRequest, AddSongToPlaylistRequest, SongPlaylistsResponse, OfflineRecognitionDraft, OfflineDraftStatus, ReviewTask, ReviewTasksResponse, CreateReviewTaskRequest, LowConfidenceHistoryResponse } from '../types';
+import { Song, RecognizeResult, UploadSongResponse, RecognitionHistoryItem, BatchUploadProgress, BatchUploadResult, DeleteSongResponse, FailedSample, FailedSamplesResponse, PromoteSampleRequest, PromoteSampleResponse, SimilarSong, SimilarSongsResponse, CalibrationResult, CalibrationStatus, QualityLevel, CompareItem, CompareSlot, CompareResult, Playlist, PlaylistsResponse, PlaylistSongsResponse, PlaylistSongDetail, CreatePlaylistRequest, UpdatePlaylistRequest, AddSongToPlaylistRequest, SongPlaylistsResponse, OfflineRecognitionDraft, OfflineDraftStatus, ReviewTask, ReviewTasksResponse, CreateReviewTaskRequest, LowConfidenceHistoryResponse, SearchSongsResponse } from '../types';
 
 const API_BASE = 'http://127.0.0.1:8080/api';
 
@@ -9,6 +9,9 @@ const OFFLINE_DRAFTS_KEY = 'audioid_offline_drafts';
 
 interface AudioState {
   songs: Song[];
+  searchResults: Song[];
+  searchQuery: string;
+  isSearching: boolean;
   pendingSongs: Song[];
   recognizeResult: RecognizeResult | null;
   isOnboardingCompleted: boolean;
@@ -46,6 +49,9 @@ interface AudioState {
   calibrationRealTimeVolume: number;
   calibrationWaveform: number[];
   fetchSongs: () => Promise<void>;
+  searchSongs: (query: string) => Promise<void>;
+  setSearchQuery: (query: string) => void;
+  clearSearch: () => void;
   fetchPendingSongs: () => Promise<void>;
   uploadSong: (title: string, artist: string, file: File) => Promise<boolean>;
   batchUploadSongs: (files: File[], defaultArtist?: string) => Promise<boolean>;
@@ -134,6 +140,9 @@ interface AudioState {
 
 export const useAudioStore = create<AudioState>((set) => ({
   songs: [],
+  searchResults: [],
+  searchQuery: '',
+  isSearching: false,
   pendingSongs: [],
   recognizeResult: null,
   isOnboardingCompleted: false,
@@ -351,6 +360,27 @@ export const useAudioStore = create<AudioState>((set) => ({
       console.error('Failed to fetch songs:', error);
     }
   },
+
+  searchSongs: async (query: string) => {
+    if (!query.trim()) {
+      set({ searchResults: [], searchQuery: '', isSearching: false });
+      return;
+    }
+    set({ isSearching: true, searchQuery: query });
+    try {
+      const response = await axios.get<SearchSongsResponse>(
+        `${API_BASE}/songs/search?q=${encodeURIComponent(query)}&limit=100`
+      );
+      set({ searchResults: response.data.songs, isSearching: false });
+    } catch (error) {
+      console.error('Failed to search songs:', error);
+      set({ searchResults: [], isSearching: false });
+    }
+  },
+
+  setSearchQuery: (query: string) => set({ searchQuery: query }),
+
+  clearSearch: () => set({ searchResults: [], searchQuery: '', isSearching: false }),
 
   fetchPendingSongs: async () => {
     set({ isFetchingPendingSongs: true });

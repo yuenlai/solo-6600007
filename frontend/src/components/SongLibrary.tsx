@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Song } from '../types';
 import { useAudioStore } from '../store/audio';
 import { SongUploader } from './SongUploader';
@@ -6,14 +6,56 @@ import { SongUploader } from './SongUploader';
 const API_BASE = 'http://127.0.0.1:8080/api';
 
 export const SongLibrary: React.FC = () => {
-  const { songs, fetchSongs, setCurrentSongId, deleteSong, isDeletingSong } = useAudioStore();
+  const { 
+    songs, 
+    searchResults, 
+    searchQuery, 
+    isSearching, 
+    fetchSongs, 
+    searchSongs, 
+    setSearchQuery,
+    clearSearch,
+    setCurrentSongId, 
+    deleteSong, 
+    isDeletingSong 
+  } = useAudioStore();
   const [playingSongId, setPlayingSongId] = useState<string | null>(null);
   const [deletingSongId, setDeletingSongId] = useState<string | null>(null);
+  const [localSearchInput, setLocalSearchInput] = useState('');
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     fetchSongs();
   }, [fetchSongs]);
+
+  const handleSearchInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setLocalSearchInput(value);
+    setSearchQuery(value);
+
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+    }
+
+    if (value.trim()) {
+      searchTimeoutRef.current = setTimeout(() => {
+        searchSongs(value);
+      }, 300);
+    } else {
+      clearSearch();
+    }
+  }, [setSearchQuery, searchSongs, clearSearch]);
+
+  const handleClearSearch = useCallback(() => {
+    setLocalSearchInput('');
+    clearSearch();
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+    }
+  }, [clearSearch]);
+
+  const displaySongs = searchQuery.trim() ? searchResults : songs;
 
   const formatDuration = (sec: number | null) => {
     if (!sec) return '--:--';
@@ -87,8 +129,68 @@ export const SongLibrary: React.FC = () => {
       <h3 style={{ margin: '0 0 16px', fontSize: '20px' }}>📚 指纹库</h3>
       <SongUploader />
       <div>
+        <div style={{ marginBottom: '16px' }}>
+          <div style={{ position: 'relative' }}>
+            <input
+              type="text"
+              placeholder="🔍 搜索歌曲名或歌手名..."
+              value={localSearchInput}
+              onChange={handleSearchInputChange}
+              style={{
+                width: '100%',
+                padding: '10px 40px 10px 14px',
+                border: '1px solid #ddd',
+                borderRadius: '8px',
+                fontSize: '14px',
+                outline: 'none',
+                boxSizing: 'border-box',
+                transition: 'border-color 0.2s',
+              }}
+              onFocus={(e) => {
+                e.currentTarget.style.borderColor = '#1976d2';
+              }}
+              onBlur={(e) => {
+                e.currentTarget.style.borderColor = '#ddd';
+              }}
+            />
+            {localSearchInput && (
+              <button
+                onClick={handleClearSearch}
+                style={{
+                  position: 'absolute',
+                  right: '10px',
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontSize: '16px',
+                  color: '#999',
+                  padding: '4px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                ✕
+              </button>
+            )}
+          </div>
+          {isSearching && (
+            <div style={{ fontSize: '12px', color: '#666', marginTop: '6px' }}>
+              搜索中...
+            </div>
+          )}
+          {searchQuery.trim() && !isSearching && (
+            <div style={{ fontSize: '12px', color: '#666', marginTop: '6px' }}>
+              找到 {searchResults.length} 个结果
+            </div>
+          )}
+        </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-          <h4 style={{ margin: 0, fontSize: '16px' }}>已入库歌曲 ({songs.length})</h4>
+          <h4 style={{ margin: 0, fontSize: '16px' }}>
+            {searchQuery.trim() ? '搜索结果' : '已入库歌曲'} ({displaySongs.length})
+          </h4>
           <button
             onClick={fetchSongs}
             style={{
@@ -103,7 +205,7 @@ export const SongLibrary: React.FC = () => {
             🔄 刷新
           </button>
         </div>
-        {songs.length === 0 ? (
+        {displaySongs.length === 0 ? (
           <div style={{
             textAlign: 'center',
             padding: '40px 20px',
@@ -111,11 +213,32 @@ export const SongLibrary: React.FC = () => {
             borderRadius: '8px',
             color: '#999',
           }}>
-            <div style={{ fontSize: '40px', marginBottom: '12px' }}>🎵</div>
-            <div>暂无歌曲，上传第一首歌吧！</div>
+            <div style={{ fontSize: '40px', marginBottom: '12px' }}>
+              {searchQuery.trim() ? '🔍' : '🎵'}
+            </div>
+            <div>
+              {searchQuery.trim() ? '未找到匹配的歌曲' : '暂无歌曲，上传第一首歌吧！'}
+            </div>
+            {searchQuery.trim() && (
+              <button
+                onClick={handleClearSearch}
+                style={{
+                  marginTop: '12px',
+                  padding: '6px 16px',
+                  border: '1px solid #1976d2',
+                  background: '#fff',
+                  color: '#1976d2',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontSize: '12px',
+                }}
+              >
+                清除搜索
+              </button>
+            )}
           </div>
         ) : (
-          songs.map(s => (
+          displaySongs.map(s => (
             <div
               key={s.id}
               onClick={() => setCurrentSongId(s.id)}

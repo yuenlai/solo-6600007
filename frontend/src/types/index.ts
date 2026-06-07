@@ -303,3 +303,8 @@ export interface ArtistActivityResponse {
   total: number;
   activities: ArtistRecentActivity[];
 }
+
+export interface SearchSongsResponse {
+  total: number;
+  songs: Song[];
+}

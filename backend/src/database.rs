@@ -105,6 +105,59 @@ pub async fn get_all_songs(pool: &SqlitePool) -> Result<Vec<Song>, sqlx::Error> 
     Ok(songs)
 }
 
+pub async fn search_songs(
+    pool: &SqlitePool,
+    query: Option<&str>,
+    title: Option<&str>,
+    artist: Option<&str>,
+    limit: i32,
+) -> Result<Vec<Song>, sqlx::Error> {
+    let mut conditions: Vec<String> = Vec::new();
+    let mut params: Vec<String> = Vec::new();
+
+    if let Some(q) = query {
+        if !q.is_empty() {
+            conditions.push("(title LIKE ? OR artist LIKE ?)".to_string());
+            params.push(format!("%{}%", q));
+            params.push(format!("%{}%", q));
+        }
+    }
+
+    if let Some(t) = title {
+        if !t.is_empty() {
+            conditions.push("title LIKE ?".to_string());
+            params.push(format!("%{}%", t));
+        }
+    }
+
+    if let Some(a) = artist {
+        if !a.is_empty() {
+            conditions.push("artist LIKE ?".to_string());
+            params.push(format!("%{}%", a));
+        }
+    }
+
+    let where_clause = if conditions.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", conditions.join(" AND "))
+    };
+
+    let sql = format!(
+        "SELECT id, title, artist, fingerprint_hash, fingerprint_peaks, fingerprint_robust, duration_sec, created_at, status FROM songs {} ORDER BY created_at DESC LIMIT ?",
+        where_clause
+    );
+
+    let mut query_builder = sqlx::query_as::<_, Song>(&sql);
+    for param in &params {
+        query_builder = query_builder.bind(param);
+    }
+    query_builder = query_builder.bind(limit);
+
+    let songs = query_builder.fetch_all(pool).await?;
+    Ok(songs)
+}
+
 pub async fn get_song_by_id(pool: &SqlitePool, id: &str) -> Result<Option<Song>, sqlx::Error> {
     let song = sqlx::query_as::<_, Song>(
         "SELECT id, title, artist, fingerprint_hash, fingerprint_peaks, fingerprint_robust, duration_sec, created_at, status FROM songs WHERE id = ?"

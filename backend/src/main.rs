@@ -72,6 +72,12 @@ struct BatchUploadResult {
 }
 
 #[derive(Serialize)]
+struct SearchSongsResponse {
+    total: usize,
+    songs: Vec<Song>,
+}
+
+#[derive(Serialize)]
 struct TopSongsResponse {
     total: usize,
     songs: Vec<RankedSong>,
@@ -440,6 +446,29 @@ async fn list_songs(pool: web::Data<SqlitePool>) -> HttpResponse {
         Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
             error: "database_error".to_string(),
             message: format!("Failed to fetch songs: {}", e),
+        }),
+    }
+}
+
+async fn search_songs(
+    query: web::Query<std::collections::HashMap<String, String>>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    let q = query.get("q").map(|s| s.as_str());
+    let title = query.get("title").map(|s| s.as_str());
+    let artist = query.get("artist").map(|s| s.as_str());
+    let limit: i32 = query.get("limit")
+        .and_then(|l| l.parse().ok())
+        .unwrap_or(100);
+
+    match database::search_songs(&pool, q, title, artist, limit).await {
+        Ok(songs) => HttpResponse::Ok().json(SearchSongsResponse {
+            total: songs.len(),
+            songs,
+        }),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to search songs: {}", e),
         }),
     }
 }
@@ -2118,6 +2147,7 @@ async fn main() -> std::io::Result<()> {
             .route("/api/health", web::get().to(health))
             .route("/api/recognize", web::post().to(recognize_audio))
             .route("/api/songs", web::get().to(list_songs))
+            .route("/api/songs/search", web::get().to(search_songs))
             .route("/api/songs/pending", web::get().to(list_pending_songs))
             .route("/api/songs/upload", web::post().to(upload_song))
             .route("/api/songs/batch-upload", web::post().to(batch_upload_songs))
