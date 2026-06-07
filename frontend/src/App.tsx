@@ -152,6 +152,7 @@ const App: React.FC = () => {
   const [tab, setTab] = useState<'recognize' | 'compare' | 'library' | 'artists' | 'queue' | 'history' | 'failed' | 'playlists' | 'drafts' | 'review'>('recognize');
   const { 
     recognizeResult, 
+    setRecognizeResult,
     currentSongId, 
     setCurrentSongId, 
     pendingSongs, 
@@ -279,6 +280,72 @@ const App: React.FC = () => {
             {tab === 'recognize' && (
               <div>
                 <Recorder />
+                
+                <div style={{ maxWidth: '560px', margin: '20px auto', padding: '16px', background: '#f5f5f5', borderRadius: '12px' }}>
+                  <h4 style={{ margin: '0 0 12px', fontSize: '14px', color: '#333' }}>🧪 测试识别结果（验证 UI 展示）</h4>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    <button
+                      onClick={() => setRecognizeResult({
+                        match_found: true,
+                        song: { id: 'test-1', title: '测试歌曲 - 高置信度', artist: '测试艺术家', duration_sec: 180 },
+                        confidence: 0.85,
+                        processing_time_ms: 120,
+                        similar_songs: [
+                          { id: 'sim-1', title: '相似歌曲1', artist: '艺术家A', duration_sec: 200, similarity_score: 0.72, reason: '旋律相似' },
+                          { id: 'sim-2', title: '相似歌曲2', artist: '艺术家B', duration_sec: 195, similarity_score: 0.65, reason: '节奏相似' }
+                        ]
+                      })}
+                      style={{ padding: '8px 16px', fontSize: '12px', borderRadius: '6px', border: 'none', background: '#2e7d32', color: '#fff', cursor: 'pointer' }}
+                    >
+                      高置信度 (85%)
+                    </button>
+                    <button
+                      onClick={() => setRecognizeResult({
+                        match_found: true,
+                        song: { id: 'test-2', title: '测试歌曲 - 中等置信度', artist: '测试艺术家', duration_sec: 210 },
+                        confidence: 0.45,
+                        processing_time_ms: 150,
+                        similar_songs: [
+                          { id: 'sim-3', title: '相似歌曲3', artist: '艺术家C', duration_sec: 188, similarity_score: 0.55, reason: '同流派' }
+                        ]
+                      })}
+                      style={{ padding: '8px 16px', fontSize: '12px', borderRadius: '6px', border: 'none', background: '#f57c00', color: '#fff', cursor: 'pointer' }}
+                    >
+                      中等置信度 (45%)
+                    </button>
+                    <button
+                      onClick={() => setRecognizeResult({
+                        match_found: true,
+                        song: { id: 'test-3', title: '测试歌曲 - 低置信度', artist: '未知艺术家', duration_sec: 160 },
+                        confidence: 0.18,
+                        processing_time_ms: 200,
+                        similar_songs: []
+                      })}
+                      style={{ padding: '8px 16px', fontSize: '12px', borderRadius: '6px', border: 'none', background: '#e65100', color: '#fff', cursor: 'pointer' }}
+                    >
+                      低置信度 (18%)
+                    </button>
+                    <button
+                      onClick={() => setRecognizeResult({
+                        match_found: false,
+                        song: null,
+                        confidence: 0,
+                        processing_time_ms: 180,
+                        similar_songs: []
+                      })}
+                      style={{ padding: '8px 16px', fontSize: '12px', borderRadius: '6px', border: 'none', background: '#c62828', color: '#fff', cursor: 'pointer' }}
+                    >
+                      未找到匹配
+                    </button>
+                    <button
+                      onClick={() => setRecognizeResult(null)}
+                      style={{ padding: '8px 16px', fontSize: '12px', borderRadius: '6px', border: '1px solid #ccc', background: '#fff', color: '#666', cursor: 'pointer' }}
+                    >
+                      清除结果
+                    </button>
+                  </div>
+                </div>
+                
                 {recognizeResult && (
                   <div style={{ maxWidth: '560px', margin: '0 auto' }}>
                     {(() => {
