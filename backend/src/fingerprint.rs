@@ -98,9 +98,27 @@ pub fn generate_hash(peaks: &[(usize, f32)]) -> String {
     format!("{:016x}", hasher.finish())
 }
 
-pub fn process_audio_and_generate_fingerprint(bytes: &[u8]) -> Result<(String, f64), AudioError> {
+pub fn process_audio_and_generate_fingerprint(bytes: &[u8]) -> Result<(String, f64, Vec<(usize, f32)>), AudioError> {
     let audio_data = read_wav_from_bytes(bytes)?;
     let peaks = extract_peaks(&audio_data.samples, audio_data.sample_rate as usize);
     let hash = generate_hash(&peaks);
-    Ok((hash, audio_data.duration_sec))
+    Ok((hash, audio_data.duration_sec, peaks))
+}
+
+pub fn calculate_similarity(peaks1: &[(usize, f32)], peaks2: &[(usize, f32)]) -> f32 {
+    if peaks1.is_empty() || peaks2.is_empty() {
+        return 0.0;
+    }
+
+    let set1: std::collections::HashSet<_> = peaks1.iter().take(200).map(|(k, _)| k).collect();
+    let set2: std::collections::HashSet<_> = peaks2.iter().take(200).map(|(k, _)| k).collect();
+
+    let intersection = set1.intersection(&set2).count();
+    let union = set1.union(&set2).count();
+
+    if union == 0 {
+        0.0
+    } else {
+        intersection as f32 / union as f32
+    }
 }

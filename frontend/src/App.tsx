@@ -24,13 +24,25 @@ const App: React.FC = () => {
             <Recorder />
             {recognizeResult && (
               <div style={{ maxWidth: '400px', margin: '0 auto', padding: '20px', borderRadius: '12px',
-                background: recognizeResult.match ? '#e8f5e9' : '#fff3e0', textAlign: 'center' }}>
-                <div style={{ fontSize: '40px' }}>{recognizeResult.match ? '✅' : '❌'}</div>
-                <div style={{ fontWeight: 600, fontSize: '18px', margin: '8px 0' }}>{recognizeResult.song.title}</div>
-                <div style={{ color: '#666' }}>{recognizeResult.song.artist}</div>
-                <div style={{ marginTop: '8px', fontSize: '12px', color: '#999' }}>
-                  置信度: {(recognizeResult.song.confidence * 100).toFixed(0)}% · 耗时: {recognizeResult.processing_time_ms}ms
-                </div>
+                background: recognizeResult.match_found ? '#e8f5e9' : '#fff3e0', textAlign: 'center' }}>
+                <div style={{ fontSize: '40px' }}>{recognizeResult.match_found ? '✅' : '❌'}</div>
+                {recognizeResult.match_found && recognizeResult.song ? (
+                  <>
+                    <div style={{ fontWeight: 600, fontSize: '18px', margin: '8px 0' }}>{recognizeResult.song.title}</div>
+                    <div style={{ color: '#666' }}>{recognizeResult.song.artist || '未知艺术家'}</div>
+                    <div style={{ marginTop: '8px', fontSize: '12px', color: '#999' }}>
+                      置信度: {(recognizeResult.confidence * 100).toFixed(0)}% · 耗时: {recognizeResult.processing_time_ms}ms
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ fontWeight: 600, fontSize: '18px', margin: '8px 0' }}>未找到匹配歌曲</div>
+                    <div style={{ color: '#666' }}>请尝试上传更清晰的音频片段</div>
+                    <div style={{ marginTop: '8px', fontSize: '12px', color: '#999' }}>
+                      耗时: {recognizeResult.processing_time_ms}ms
+                    </div>
+                  </>
+                )}
               </div>
             )}
           </div>

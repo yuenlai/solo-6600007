@@ -29,6 +29,22 @@ struct UploadResponse {
 }
 
 #[derive(Serialize)]
+struct RecognizeResponse {
+    match_found: bool,
+    song: Option<SongMatch>,
+    confidence: f32,
+    processing_time_ms: u64,
+}
+
+#[derive(Serialize)]
+struct SongMatch {
+    id: String,
+    title: String,
+    artist: Option<String>,
+    duration_sec: Option<i64>,
+}
+
+#[derive(Serialize)]
 struct ErrorResponse {
     error: String,
     message: String,
@@ -40,13 +56,105 @@ async fn health() -> HttpResponse {
     })
 }
 
-async fn recognize(data: web::Json<serde_json::Value>) -> HttpResponse {
-    let audio_hash = data.get("audio_hash").and_then(|v| v.as_str()).unwrap_or("");
-    HttpResponse::Ok().json(serde_json::json!({
-        "match": audio_hash.is_empty() == false,
-        "song": { "title": "Unknown Track", "artist": "Unknown", "confidence": 0.0 },
-        "processing_time_ms": 42
-    }))
+async fn recognize_audio(
+    mut payload: Multipart,
+    pool: web::Data<SqlitePool>,
+) -> Result<HttpResponse, Error> {
+    let start = std::time::Instant::now();
+    let mut audio_bytes: Option<Vec<u8>> = None;
+
+    while let Some(item) = payload.next().await {
+        let mut field = item?;
+        let content_disposition = field.content_disposition();
+
+        let name = content_disposition.get_name().unwrap_or("");
+
+        if name == "file" {
+            let mut bytes = web::BytesMut::new();
+            while let Some(chunk) = field.next().await {
+                bytes.extend_from_slice(&chunk?);
+            }
+            audio_bytes = Some(bytes.to_vec());
+        }
+    }
+
+    let audio_bytes = match audio_bytes {
+        Some(b) if !b.is_empty() => b,
+        _ => {
+            return Ok(HttpResponse::BadRequest().json(ErrorResponse {
+                error: "missing_file".to_string(),
+                message: "Audio file is required".to_string(),
+            }));
+        }
+    };
+
+    let (_, _, input_peaks) = match fingerprint::process_audio_and_generate_fingerprint(&audio_bytes) {
+        Ok(result) => result,
+        Err(e) => {
+            return Ok(HttpResponse::BadRequest().json(ErrorResponse {
+                error: "audio_processing_error".to_string(),
+                message: format!("Failed to process audio file: {:?}", e),
+            }));
+        }
+    };
+
+    let songs = match database::get_all_songs(&pool).await {
+        Ok(s) => s,
+        Err(e) => {
+            return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
+                error: "database_error".to_string(),
+                message: format!("Failed to fetch songs: {}", e),
+            }));
+        }
+    };
+
+    let mut best_match: Option<(database::Song, f32)> = None;
+
+    for song in songs {
+        if let Some(peaks_str) = &song.fingerprint_peaks {
+            if let Ok(stored_peaks) = serde_json::from_str::<Vec<(usize, f32)>>(peaks_str) {
+                let similarity = fingerprint::calculate_similarity(&input_peaks, &stored_peaks);
+                match &best_match {
+                    Some((_, best_sim)) if similarity > *best_sim => {
+                        best_match = Some((song, similarity));
+                    }
+                    None => {
+                        best_match = Some((song, similarity));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    let processing_time_ms = start.elapsed().as_millis() as u64;
+    let confidence_threshold = 0.1;
+
+    let response = match best_match {
+        Some((song, confidence)) if confidence >= confidence_threshold => {
+            RecognizeResponse {
+                match_found: true,
+                song: Some(SongMatch {
+                    id: song.id,
+                    title: song.title,
+                    artist: song.artist,
+                    duration_sec: song.duration_sec,
+                }),
+                confidence,
+                processing_time_ms,
+            }
+        }
+        _ => {
+            RecognizeResponse {
+                match_found: false,
+                song: None,
+                confidence: 0.0,
+                processing_time_ms,
+            }
+        }
+    };
+
+    Ok(HttpResponse::Ok().json(response))
 }
 
 async fn list_songs(pool: web::Data<SqlitePool>) -> HttpResponse {
@@ -121,8 +229,8 @@ async fn upload_song(
         }
     };
 
-    let (fingerprint_hash, duration_sec) = match fingerprint::process_audio_and_generate_fingerprint(&audio_bytes) {
-        Ok((hash, duration)) => (hash, duration as i64),
+    let (fingerprint_hash, duration_sec, peaks) = match fingerprint::process_audio_and_generate_fingerprint(&audio_bytes) {
+        Ok((hash, duration, peaks)) => (hash, duration as i64, peaks),
         Err(e) => {
             return Ok(HttpResponse::BadRequest().json(ErrorResponse {
                 error: "audio_processing_error".to_string(),
@@ -130,6 +238,8 @@ async fn upload_song(
             }));
         }
     };
+
+    let peaks_json = serde_json::to_string(&peaks).ok();
 
     let song_id = Uuid::new_v4().to_string();
 
@@ -139,6 +249,7 @@ async fn upload_song(
         &title,
         artist.as_deref(),
         &fingerprint_hash,
+        peaks_json.as_deref(),
         Some(duration_sec),
     ).await {
         Ok(_) => {
@@ -176,7 +287,7 @@ async fn main() -> std::io::Result<()> {
             .wrap(cors)
             .app_data(web::Data::new(pool.clone()))
             .route("/api/health", web::get().to(health))
-            .route("/api/recognize", web::post().to(recognize))
+            .route("/api/recognize", web::post().to(recognize_audio))
             .route("/api/songs", web::get().to(list_songs))
             .route("/api/songs/upload", web::post().to(upload_song))
     }).bind("127.0.0.1:8080")?.run().await

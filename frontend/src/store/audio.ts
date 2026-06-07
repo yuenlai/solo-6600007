@@ -10,15 +10,19 @@ interface AudioState {
   isRecording: boolean;
   audioLevel: number;
   isUploading: boolean;
+  isRecognizing: boolean;
+  recognizeError: string | null;
   uploadError: string | null;
   uploadSuccess: UploadSongResponse | null;
   fetchSongs: () => Promise<void>;
   uploadSong: (title: string, artist: string, file: File) => Promise<boolean>;
+  recognizeFile: (file: File) => Promise<boolean>;
   setSongs: (songs: Song[]) => void;
   setRecognizeResult: (r: RecognizeResult | null) => void;
   setRecording: (v: boolean) => void;
   setAudioLevel: (v: number) => void;
   clearUploadStatus: () => void;
+  clearRecognizeStatus: () => void;
 }
 
 export const useAudioStore = create<AudioState>((set) => ({
@@ -27,6 +31,8 @@ export const useAudioStore = create<AudioState>((set) => ({
   isRecording: false,
   audioLevel: 0,
   isUploading: false,
+  isRecognizing: false,
+  recognizeError: null,
   uploadError: null,
   uploadSuccess: null,
 
@@ -64,9 +70,31 @@ export const useAudioStore = create<AudioState>((set) => ({
     }
   },
 
+  recognizeFile: async (file: File) => {
+    set({ isRecognizing: true, recognizeError: null, recognizeResult: null });
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const response = await axios.post<RecognizeResult>(
+        `${API_BASE}/recognize`,
+        formData,
+        { headers: { 'Content-Type': 'multipart/form-data' } }
+      );
+
+      set({ isRecognizing: false, recognizeResult: response.data });
+      return true;
+    } catch (error: any) {
+      const message = error.response?.data?.message || error.message || 'Recognition failed';
+      set({ isRecognizing: false, recognizeError: message });
+      return false;
+    }
+  },
+
   setSongs: (songs) => set({ songs }),
   setRecognizeResult: (r) => set({ recognizeResult: r }),
   setRecording: (v) => set({ isRecording: v }),
   setAudioLevel: (v) => set({ audioLevel: v }),
   clearUploadStatus: () => set({ uploadError: null, uploadSuccess: null }),
+  clearRecognizeStatus: () => set({ recognizeError: null, recognizeResult: null }),
 }));

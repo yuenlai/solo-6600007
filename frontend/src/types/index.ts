@@ -8,8 +8,9 @@ export interface Song {
 }
 
 export interface RecognizeResult {
-  match: boolean;
-  song: { title: string; artist: string; confidence: number };
+  match_found: boolean;
+  song: { id: string; title: string; artist: string | null; duration_sec: number | null } | null;
+  confidence: number;
   processing_time_ms: number;
 }
 
