@@ -42,3 +42,19 @@ export interface RecognitionHistoryItem {
   processing_time_ms: number;
   created_at: string;
 }
+
+export interface BatchUploadProgress {
+  file_index: number;
+  file_name: string;
+  status: 'pending' | 'uploading' | 'processing' | 'completed' | 'failed';
+  progress: number;
+  song: UploadSongResponse | null;
+  error: string | null;
+}
+
+export interface BatchUploadResult {
+  total: number;
+  success: number;
+  failed: number;
+  results: BatchUploadProgress[];
+}

@@ -1,10 +1,11 @@
-use actix_web::{web, App, HttpServer, HttpResponse, Error};
+use actix_web::{web, App, HttpServer, HttpResponse, Error, ResponseError};
 use actix_cors::Cors;
 use actix_multipart::Multipart;
 use serde::{Serialize, Deserialize};
 use futures_util::StreamExt;
 use uuid::Uuid;
 use sqlx::SqlitePool;
+use std::fmt;
 
 mod fingerprint;
 mod database;
@@ -48,6 +49,24 @@ struct SongMatch {
 struct ErrorResponse {
     error: String,
     message: String,
+}
+
+#[derive(Serialize, Clone)]
+struct BatchUploadProgress {
+    file_index: usize,
+    file_name: String,
+    status: String,
+    progress: u32,
+    song: Option<UploadResponse>,
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct BatchUploadResult {
+    total: usize,
+    success: usize,
+    failed: usize,
+    results: Vec<BatchUploadProgress>,
 }
 
 async fn health() -> HttpResponse {
@@ -354,6 +373,152 @@ async fn upload_song(
     }
 }
 
+async fn batch_upload_songs(
+    mut payload: Multipart,
+    pool: web::Data<SqlitePool>,
+) -> Result<HttpResponse, Error> {
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut titles: Vec<Option<String>> = Vec::new();
+    let mut artists: Vec<Option<String>> = Vec::new();
+    let mut current_file_index = 0;
+
+    while let Some(item) = payload.next().await {
+        let mut field = item?;
+        let content_disposition = field.content_disposition();
+        let name = content_disposition.get_name().unwrap_or("");
+
+        if name.starts_with("file_") {
+            let file_name = content_disposition.get_file_name().unwrap_or("unknown.wav").to_string();
+            let mut bytes = web::BytesMut::new();
+            while let Some(chunk) = field.next().await {
+                bytes.extend_from_slice(&chunk?);
+            }
+            files.push((file_name, bytes.to_vec()));
+            current_file_index += 1;
+        } else if name.starts_with("title_") {
+            let mut bytes = web::BytesMut::new();
+            while let Some(chunk) = field.next().await {
+                bytes.extend_from_slice(&chunk?);
+            }
+            let value = String::from_utf8_lossy(&bytes).to_string();
+            titles.push(if value.is_empty() { None } else { Some(value) });
+        } else if name.starts_with("artist_") {
+            let mut bytes = web::BytesMut::new();
+            while let Some(chunk) = field.next().await {
+                bytes.extend_from_slice(&chunk?);
+            }
+            let value = String::from_utf8_lossy(&bytes).to_string();
+            artists.push(if value.is_empty() { None } else { Some(value) });
+        }
+    }
+
+    if files.is_empty() {
+        return Ok(HttpResponse::BadRequest().json(ErrorResponse {
+            error: "no_files".to_string(),
+            message: "No audio files provided".to_string(),
+        }));
+    }
+
+    while titles.len() < files.len() {
+        titles.push(None);
+    }
+    while artists.len() < files.len() {
+        artists.push(None);
+    }
+
+    let mut results = Vec::new();
+    let mut success_count = 0;
+    let mut failed_count = 0;
+
+    for (index, ((file_name, audio_bytes), title_opt)) in files.iter().zip(titles.iter()).enumerate() {
+        let artist = artists.get(index).cloned().flatten();
+        let title = title_opt.clone().unwrap_or_else(|| {
+            file_name.rfind('.')
+                .map(|pos| file_name[..pos].to_string())
+                .unwrap_or_else(|| file_name.clone())
+        });
+
+        let mut progress = BatchUploadProgress {
+            file_index: index,
+            file_name: file_name.clone(),
+            status: "processing".to_string(),
+            progress: 25,
+            song: None,
+            error: None,
+        };
+
+        if audio_bytes.is_empty() {
+            progress.status = "failed".to_string();
+            progress.progress = 100;
+            progress.error = Some("Empty audio file".to_string());
+            failed_count += 1;
+            results.push(progress);
+            continue;
+        }
+
+        progress.progress = 50;
+
+        let (fingerprint_hash, duration_sec, peaks, robust) = match fingerprint::process_audio_and_generate_fingerprint(audio_bytes) {
+            Ok((hash, duration, peaks, robust)) => (hash, duration as i64, peaks, robust),
+            Err(e) => {
+                progress.status = "failed".to_string();
+                progress.progress = 100;
+                progress.error = Some(format!("Audio processing failed: {:?}", e));
+                failed_count += 1;
+                results.push(progress);
+                continue;
+            }
+        };
+
+        progress.progress = 75;
+
+        let peaks_json = serde_json::to_string(&peaks).ok();
+        let robust_json = serde_json::to_string(&robust).ok();
+        let song_id = Uuid::new_v4().to_string();
+
+        match database::insert_song(
+            &pool,
+            &song_id,
+            &title,
+            artist.as_deref(),
+            &fingerprint_hash,
+            peaks_json.as_deref(),
+            robust_json.as_deref(),
+            Some(duration_sec),
+        ).await {
+            Ok(_) => {
+                progress.status = "completed".to_string();
+                progress.progress = 100;
+                progress.song = Some(UploadResponse {
+                    id: song_id,
+                    title: title.clone(),
+                    artist: artist.clone(),
+                    fingerprint_hash,
+                    duration_sec: Some(duration_sec),
+                    status: "success".to_string(),
+                    message: "Song uploaded and fingerprinted successfully".to_string(),
+                });
+                success_count += 1;
+            }
+            Err(e) => {
+                progress.status = "failed".to_string();
+                progress.progress = 100;
+                progress.error = Some(format!("Database error: {}", e));
+                failed_count += 1;
+            }
+        }
+
+        results.push(progress);
+    }
+
+    Ok(HttpResponse::Ok().json(BatchUploadResult {
+        total: files.len(),
+        success: success_count,
+        failed: failed_count,
+        results,
+    }))
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     env_logger::init();
@@ -373,6 +538,7 @@ async fn main() -> std::io::Result<()> {
             .route("/api/recognize", web::post().to(recognize_audio))
             .route("/api/songs", web::get().to(list_songs))
             .route("/api/songs/upload", web::post().to(upload_song))
+            .route("/api/songs/batch-upload", web::post().to(batch_upload_songs))
             .route("/api/songs/{id}", web::get().to(get_song_detail))
             .route("/api/songs/{id}/history", web::get().to(get_song_history))
             .route("/api/history", web::get().to(get_history))

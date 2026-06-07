@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import axios from 'axios';
-import { Song, RecognizeResult, UploadSongResponse, RecognitionHistoryItem } from '../types';
+import { Song, RecognizeResult, UploadSongResponse, RecognitionHistoryItem, BatchUploadProgress, BatchUploadResult } from '../types';
 
 const API_BASE = 'http://127.0.0.1:8080/api';
 
@@ -21,8 +21,13 @@ interface AudioState {
   currentSongHistory: RecognitionHistoryItem[];
   isFetchingSongDetail: boolean;
   isFetchingSongHistory: boolean;
+  isBatchUploading: boolean;
+  batchUploadProgress: BatchUploadProgress[];
+  batchUploadResult: BatchUploadResult | null;
+  batchUploadError: string | null;
   fetchSongs: () => Promise<void>;
   uploadSong: (title: string, artist: string, file: File) => Promise<boolean>;
+  batchUploadSongs: (files: File[], defaultArtist?: string) => Promise<boolean>;
   recognizeFile: (file: File) => Promise<boolean>;
   fetchHistory: () => Promise<void>;
   fetchSongDetail: (songId: string) => Promise<void>;
@@ -34,6 +39,7 @@ interface AudioState {
   setAudioLevel: (v: number) => void;
   clearUploadStatus: () => void;
   clearRecognizeStatus: () => void;
+  clearBatchUploadStatus: () => void;
 }
 
 export const useAudioStore = create<AudioState>((set) => ({
@@ -53,6 +59,10 @@ export const useAudioStore = create<AudioState>((set) => ({
   currentSongHistory: [],
   isFetchingSongDetail: false,
   isFetchingSongHistory: false,
+  isBatchUploading: false,
+  batchUploadProgress: [],
+  batchUploadResult: null,
+  batchUploadError: null,
 
   fetchSongs: async () => {
     try {
@@ -88,6 +98,60 @@ export const useAudioStore = create<AudioState>((set) => ({
     }
   },
 
+  batchUploadSongs: async (files: File[], defaultArtist?: string) => {
+    const initialProgress: BatchUploadProgress[] = files.map((file, index) => ({
+      file_index: index,
+      file_name: file.name,
+      status: 'pending',
+      progress: 0,
+      song: null,
+      error: null,
+    }));
+
+    set({ isBatchUploading: true, batchUploadProgress: initialProgress, batchUploadResult: null, batchUploadError: null });
+
+    try {
+      const formData = new FormData();
+      files.forEach((file, index) => {
+        formData.append(`file_${index}`, file);
+        const title = file.name.replace(/\.[^/.]+$/, '');
+        formData.append(`title_${index}`, title);
+        if (defaultArtist) {
+          formData.append(`artist_${index}`, defaultArtist);
+        }
+      });
+
+      set((state) => ({
+        batchUploadProgress: state.batchUploadProgress.map((p) => ({
+          ...p,
+          status: 'uploading',
+          progress: 10,
+        })),
+      }));
+
+      const response = await axios.post<BatchUploadResult>(
+        `${API_BASE}/songs/batch-upload`,
+        formData,
+        { headers: { 'Content-Type': 'multipart/form-data' } }
+      );
+
+      set({
+        isBatchUploading: false,
+        batchUploadProgress: response.data.results.map((r) => ({
+          ...r,
+          status: r.status as any,
+        })),
+        batchUploadResult: response.data,
+      });
+
+      return true;
+    } catch (error: any) {
+      const message = error.response?.data?.message || error.message || 'Batch upload failed';
+      set({ isBatchUploading: false, batchUploadError: message });
+      return false;
+    }
+  },
+
   recognizeFile: async (file: File) => {
     set({ isRecognizing: true, recognizeError: null, recognizeResult: null });
     try {
@@ -115,6 +179,7 @@ export const useAudioStore = create<AudioState>((set) => ({
   setAudioLevel: (v) => set({ audioLevel: v }),
   clearUploadStatus: () => set({ uploadError: null, uploadSuccess: null }),
   clearRecognizeStatus: () => set({ recognizeError: null, recognizeResult: null }),
+  clearBatchUploadStatus: () => set({ batchUploadProgress: [], batchUploadResult: null, batchUploadError: null }),
 
   fetchHistory: async () => {
     set({ isFetchingHistory: true });
