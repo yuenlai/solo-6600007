@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import axios from 'axios';
-import { Song, RecognizeResult, UploadSongResponse, RecognitionHistoryItem, BatchUploadProgress, BatchUploadResult, DeleteSongResponse, FailedSample, FailedSamplesResponse, PromoteSampleRequest, PromoteSampleResponse, SimilarSong, SimilarSongsResponse, CalibrationResult, CalibrationStatus, QualityLevel } from '../types';
+import { Song, RecognizeResult, UploadSongResponse, RecognitionHistoryItem, BatchUploadProgress, BatchUploadResult, DeleteSongResponse, FailedSample, FailedSamplesResponse, PromoteSampleRequest, PromoteSampleResponse, SimilarSong, SimilarSongsResponse, CalibrationResult, CalibrationStatus, QualityLevel, CompareItem, CompareSlot, CompareResult } from '../types';
 
 const API_BASE = 'http://127.0.0.1:8080/api';
 
@@ -66,6 +66,15 @@ interface AudioState {
   fetchFailedSamples: () => Promise<void>;
   deleteFailedSample: (sampleId: string) => Promise<boolean>;
   promoteFailedSample: (sampleId: string, title: string, artist?: string | null) => Promise<boolean>;
+  compareItemA: CompareItem;
+  compareItemB: CompareItem;
+  compareResult: CompareResult | null;
+  setCompareFile: (slot: CompareSlot, file: File | null) => void;
+  setCompareRecording: (slot: CompareSlot, recording: boolean) => void;
+  recognizeCompareSlot: (slot: CompareSlot) => Promise<boolean>;
+  clearCompareSlot: (slot: CompareSlot) => void;
+  clearCompareAll: () => void;
+  calculateCompareResult: () => void;
 }
 
 export const useAudioStore = create<AudioState>((set) => ({
@@ -105,6 +114,25 @@ export const useAudioStore = create<AudioState>((set) => ({
   calibrationResult: null,
   calibrationRealTimeVolume: 0,
   calibrationWaveform: [],
+  compareItemA: {
+    slot: 'A',
+    file: null,
+    fileName: null,
+    isRecording: false,
+    isRecognizing: false,
+    result: null,
+    error: null,
+  },
+  compareItemB: {
+    slot: 'B',
+    file: null,
+    fileName: null,
+    isRecording: false,
+    isRecognizing: false,
+    result: null,
+    error: null,
+  },
+  compareResult: null,
 
   fetchSongs: async () => {
     try {
@@ -508,6 +536,166 @@ export const useAudioStore = create<AudioState>((set) => ({
       calibrationResult: null,
       calibrationRealTimeVolume: 0,
       calibrationWaveform: []
+    });
+  },
+
+  setCompareFile: (slot: CompareSlot, file: File | null) => {
+    const key = slot === 'A' ? 'compareItemA' : 'compareItemB';
+    set((state) => ({
+      [key]: {
+        ...state[key],
+        file,
+        fileName: file?.name || null,
+        result: null,
+        error: null,
+      },
+      compareResult: null,
+    }));
+  },
+
+  setCompareRecording: (slot: CompareSlot, recording: boolean) => {
+    const key = slot === 'A' ? 'compareItemA' : 'compareItemB';
+    set((state) => ({
+      [key]: {
+        ...state[key],
+        isRecording: recording,
+      },
+    }));
+  },
+
+  recognizeCompareSlot: async (slot: CompareSlot) => {
+    const key = slot === 'A' ? 'compareItemA' : 'compareItemB';
+    
+    set((state) => ({
+      [key]: {
+        ...state[key],
+        isRecognizing: true,
+        error: null,
+        result: null,
+      },
+      compareResult: null,
+    }));
+
+    const getStateFunc = () => useAudioStore.getState();
+    const file = getStateFunc()[key].file;
+
+    if (!file) {
+      set((state) => ({
+        [key]: {
+          ...state[key],
+          isRecognizing: false,
+          error: '请先选择音频文件',
+        },
+      }));
+      return false;
+    }
+
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const response = await axios.post<RecognizeResult>(
+        `${API_BASE}/recognize`,
+        formData,
+        { headers: { 'Content-Type': 'multipart/form-data' } }
+      );
+
+      set((state) => ({
+        [key]: {
+          ...state[key],
+          isRecognizing: false,
+          result: response.data,
+        },
+      }));
+
+      return true;
+    } catch (error: any) {
+      const message = error.response?.data?.message || error.message || '识别失败';
+      set((state) => ({
+        [key]: {
+          ...state[key],
+          isRecognizing: false,
+          error: message,
+        },
+      }));
+      return false;
+    }
+  },
+
+  clearCompareSlot: (slot: CompareSlot) => {
+    const key = slot === 'A' ? 'compareItemA' : 'compareItemB';
+    set((state) => ({
+      [key]: {
+        ...state[key],
+        file: null,
+        fileName: null,
+        isRecording: false,
+        isRecognizing: false,
+        result: null,
+        error: null,
+      },
+      compareResult: null,
+    }));
+  },
+
+  clearCompareAll: () => {
+    set({
+      compareItemA: {
+        slot: 'A',
+        file: null,
+        fileName: null,
+        isRecording: false,
+        isRecognizing: false,
+        result: null,
+        error: null,
+      },
+      compareItemB: {
+        slot: 'B',
+        file: null,
+        fileName: null,
+        isRecording: false,
+        isRecognizing: false,
+        result: null,
+        error: null,
+      },
+      compareResult: null,
+    });
+  },
+
+  calculateCompareResult: () => {
+    const state = useAudioStore.getState();
+    const resultA = state.compareItemA.result;
+    const resultB = state.compareItemB.result;
+
+    if (!resultA || !resultB) {
+      set({ compareResult: null });
+      return;
+    }
+
+    const sameTitle = resultA.song?.title === resultB.song?.title;
+    const sameArtist = resultA.song?.artist === resultB.song?.artist;
+    const isSameSong = resultA.match_found && resultB.match_found && sameTitle;
+    const confidenceDiff = Math.abs(resultA.confidence - resultB.confidence);
+
+    let summary = '';
+    if (isSameSong) {
+      summary = '✅ 两段音频识别为同一首歌曲';
+    } else if (resultA.match_found && resultB.match_found) {
+      summary = '❌ 两段音频识别为不同的歌曲';
+    } else if (!resultA.match_found && !resultB.match_found) {
+      summary = '⚠️ 两段音频均未找到匹配歌曲';
+    } else {
+      summary = '⚠️ 仅一段音频找到匹配歌曲';
+    }
+
+    set({
+      compareResult: {
+        isSameSong,
+        confidenceDiff,
+        sameTitle,
+        sameArtist,
+        summary,
+      },
     });
   },
 }));

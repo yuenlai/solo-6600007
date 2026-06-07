@@ -109,6 +109,26 @@ export interface SimilarSongsResponse {
   songs: SimilarSong[];
 }
 
+export type CompareSlot = 'A' | 'B';
+
+export interface CompareItem {
+  slot: CompareSlot;
+  file: File | null;
+  fileName: string | null;
+  isRecording: boolean;
+  isRecognizing: boolean;
+  result: RecognizeResult | null;
+  error: string | null;
+}
+
+export interface CompareResult {
+  isSameSong: boolean;
+  confidenceDiff: number;
+  sameTitle: boolean;
+  sameArtist: boolean;
+  summary: string;
+}
+
 export type CalibrationStatus = 'idle' | 'calibrating' | 'success' | 'failed';
 
 export type QualityLevel = 'excellent' | 'good' | 'fair' | 'poor' | 'no_signal';

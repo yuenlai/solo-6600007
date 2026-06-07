@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Recorder } from './components/Recorder';
+import { CompareRecorder } from './components/CompareRecorder';
 import { SongLibrary } from './components/SongLibrary';
 import { RecognitionHistory } from './components/RecognitionHistory';
 import { SongDetail } from './components/SongDetail';
@@ -8,7 +9,7 @@ import { FailedSamples } from './components/FailedSamples';
 import { useAudioStore } from './store/audio';
 
 const App: React.FC = () => {
-  const [tab, setTab] = useState<'recognize' | 'library' | 'queue' | 'history' | 'failed'>('recognize');
+  const [tab, setTab] = useState<'recognize' | 'compare' | 'library' | 'queue' | 'history' | 'failed'>('recognize');
   const { recognizeResult, currentSongId, setCurrentSongId, pendingSongs, failedSamples } = useAudioStore();
 
   const pendingCount = pendingSongs.length;
@@ -20,6 +21,7 @@ const App: React.FC = () => {
         <h2 style={{ margin: '0 0 20px', padding: '0 16px', fontSize: '15px' }}>🎵 AudioID</h2>
         {[
           { key: 'recognize', label: '🎤 识别' },
+          { key: 'compare', label: '🔄 对比识别' },
           { key: 'library', label: '📚 指纹库' },
           { key: 'queue', label: `⏳ 待处理${pendingCount > 0 ? ` (${pendingCount})` : ''}` },
           { key: 'failed', label: `🗑️ 失败样本${failedCount > 0 ? ` (${failedCount})` : ''}` },
@@ -112,6 +114,7 @@ const App: React.FC = () => {
                 )}
               </div>
             )}
+            {tab === 'compare' && <CompareRecorder />}
             {tab === 'library' && <SongLibrary />}
             {tab === 'queue' && <PendingQueue />}
             {tab === 'failed' && <FailedSamples />}
