@@ -11,7 +11,7 @@ use std::fmt;
 mod fingerprint;
 mod database;
 
-use database::{Song, RecognitionHistory, RankedSong, TrendingSong, FailedSample, get_pending_songs};
+use database::{Song, RecognitionHistory, RankedSong, TrendingSong, FailedSample, SimilarSong, get_pending_songs};
 
 #[derive(Serialize)]
 struct HealthResponse { status: String, service: String }
@@ -36,6 +36,7 @@ struct RecognizeResponse {
     song: Option<SongMatch>,
     confidence: f32,
     processing_time_ms: u64,
+    similar_songs: Vec<SimilarSong>,
 }
 
 #[derive(Serialize)]
@@ -87,6 +88,12 @@ struct TrendingSongsResponse {
 struct FailedSamplesResponse {
     total: usize,
     samples: Vec<FailedSample>,
+}
+
+#[derive(Serialize)]
+struct SimilarSongsResponse {
+    total: usize,
+    songs: Vec<SimilarSong>,
 }
 
 #[derive(Deserialize)]
@@ -212,6 +219,10 @@ async fn recognize_audio(
                 processing_time_ms as i64,
             ).await;
 
+            let similar_songs = database::get_similar_songs(&pool, &song.id, 5)
+                .await
+                .unwrap_or_default();
+
             RecognizeResponse {
                 match_found: true,
                 song: Some(SongMatch {
@@ -222,6 +233,7 @@ async fn recognize_audio(
                 }),
                 confidence: confidence.min(1.0),
                 processing_time_ms,
+                similar_songs,
             }
         }
         _ => {
@@ -258,6 +270,7 @@ async fn recognize_audio(
                 song: None,
                 confidence: 0.0,
                 processing_time_ms,
+                similar_songs: Vec::new(),
             }
         }
     };
@@ -387,6 +400,27 @@ async fn get_song_preview(
         Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
             error: "database_error".to_string(),
             message: format!("Failed to fetch audio preview: {}", e),
+        }),
+    }
+}
+
+async fn get_similar_songs(
+    song_id: web::Path<String>,
+    query: web::Query<std::collections::HashMap<String, String>>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    let limit: i32 = query.get("limit")
+        .and_then(|l| l.parse().ok())
+        .unwrap_or(5);
+
+    match database::get_similar_songs(&pool, &song_id, limit).await {
+        Ok(songs) => HttpResponse::Ok().json(SimilarSongsResponse {
+            total: songs.len(),
+            songs,
+        }),
+        Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
+            error: "database_error".to_string(),
+            message: format!("Failed to fetch similar songs: {}", e),
         }),
     }
 }
@@ -810,6 +844,7 @@ async fn main() -> std::io::Result<()> {
             .route("/api/songs/{id}", web::get().to(get_song_detail))
             .route("/api/songs/{id}/history", web::get().to(get_song_history))
             .route("/api/songs/{id}/preview", web::get().to(get_song_preview))
+            .route("/api/songs/{id}/similar", web::get().to(get_similar_songs))
             .route("/api/songs/{id}", web::delete().to(delete_song))
             .route("/api/history", web::get().to(get_history))
             .route("/api/rankings/top", web::get().to(get_top_songs))

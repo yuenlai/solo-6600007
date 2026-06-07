@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import axios from 'axios';
-import { Song, RecognizeResult, UploadSongResponse, RecognitionHistoryItem, BatchUploadProgress, BatchUploadResult, DeleteSongResponse, FailedSample, FailedSamplesResponse, PromoteSampleRequest, PromoteSampleResponse } from '../types';
+import { Song, RecognizeResult, UploadSongResponse, RecognitionHistoryItem, BatchUploadProgress, BatchUploadResult, DeleteSongResponse, FailedSample, FailedSamplesResponse, PromoteSampleRequest, PromoteSampleResponse, SimilarSong, SimilarSongsResponse } from '../types';
 
 const API_BASE = 'http://127.0.0.1:8080/api';
 
@@ -35,6 +35,8 @@ interface AudioState {
   isDeletingFailedSample: boolean;
   failedSamplesError: string | null;
   promoteSampleError: string | null;
+  similarSongs: SimilarSong[];
+  isFetchingSimilarSongs: boolean;
   fetchSongs: () => Promise<void>;
   fetchPendingSongs: () => Promise<void>;
   uploadSong: (title: string, artist: string, file: File) => Promise<boolean>;
@@ -43,6 +45,7 @@ interface AudioState {
   fetchHistory: () => Promise<void>;
   fetchSongDetail: (songId: string) => Promise<void>;
   fetchSongHistory: (songId: string) => Promise<void>;
+  fetchSimilarSongs: (songId: string, limit?: number) => Promise<void>;
   deleteSong: (songId: string) => Promise<boolean>;
   setCurrentSongId: (id: string | null) => void;
   setSongs: (songs: Song[]) => void;
@@ -89,6 +92,8 @@ export const useAudioStore = create<AudioState>((set) => ({
   isDeletingFailedSample: false,
   failedSamplesError: null,
   promoteSampleError: null,
+  similarSongs: [],
+  isFetchingSimilarSongs: false,
 
   fetchSongs: async () => {
     try {
@@ -309,6 +314,19 @@ export const useAudioStore = create<AudioState>((set) => ({
       const message = error.response?.data?.message || error.message || 'Promote failed';
       set({ isPromotingSample: false, promoteSampleError: message });
       return false;
+    }
+  },
+
+  fetchSimilarSongs: async (songId: string, limit: number = 5) => {
+    set({ isFetchingSimilarSongs: true });
+    try {
+      const response = await axios.get<SimilarSongsResponse>(
+        `${API_BASE}/songs/${songId}/similar?limit=${limit}`
+      );
+      set({ similarSongs: response.data.songs, isFetchingSimilarSongs: false });
+    } catch (error) {
+      console.error('Failed to fetch similar songs:', error);
+      set({ similarSongs: [], isFetchingSimilarSongs: false });
     }
   },
 }));

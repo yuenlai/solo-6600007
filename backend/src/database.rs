@@ -314,6 +314,16 @@ pub async fn get_trending_songs(pool: &SqlitePool, limit: i32, days: i32) -> Res
 }
 
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct SimilarSong {
+    pub id: String,
+    pub title: String,
+    pub artist: Option<String>,
+    pub duration_sec: Option<i64>,
+    pub similarity_score: f32,
+    pub reason: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct FailedSample {
     pub id: String,
     pub audio_data: Option<Vec<u8>>,
@@ -405,4 +415,82 @@ pub async fn get_failed_sample_by_id(pool: &SqlitePool, id: &str) -> Result<Opti
     .fetch_optional(pool)
     .await?;
     Ok(sample)
+}
+
+pub async fn get_similar_songs(
+    pool: &SqlitePool,
+    song_id: &str,
+    limit: i32,
+) -> Result<Vec<SimilarSong>, sqlx::Error> {
+    let current_song = match get_song_by_id(pool, song_id).await? {
+        Some(s) => s,
+        None => return Ok(Vec::new()),
+    };
+
+    let all_songs = get_all_songs(pool).await?;
+    let mut similar_songs: Vec<SimilarSong> = Vec::new();
+
+    for song in all_songs {
+        if song.id == song_id {
+            continue;
+        }
+
+        let mut score: f32 = 0.0;
+        let mut reasons: Vec<String> = Vec::new();
+
+        if let (Some(ref curr_artist), Some(ref song_artist)) = (&current_song.artist, &song.artist) {
+            if curr_artist.to_lowercase() == song_artist.to_lowercase() {
+                score += 0.6;
+                reasons.push("同一艺术家".to_string());
+            }
+        }
+
+        let hash_sim = calculate_hash_similarity_score(&current_song.fingerprint_hash, &song.fingerprint_hash);
+        score += hash_sim * 0.4;
+        if hash_sim > 0.3 {
+            reasons.push("风格相似".to_string());
+        }
+
+        if let (Some(curr_dur), Some(song_dur)) = (current_song.duration_sec, song.duration_sec) {
+            let diff = (curr_dur - song_dur).abs();
+            if diff < 30 {
+                score += 0.1;
+            }
+        }
+
+        if score > 0.15 {
+            similar_songs.push(SimilarSong {
+                id: song.id,
+                title: song.title,
+                artist: song.artist,
+                duration_sec: song.duration_sec,
+                similarity_score: score.min(1.0),
+                reason: if reasons.is_empty() { "风格接近".to_string() } else { reasons.join("、") },
+            });
+        }
+    }
+
+    similar_songs.sort_by(|a, b| b.similarity_score.partial_cmp(&a.similarity_score).unwrap_or(std::cmp::Ordering::Equal));
+    similar_songs.truncate(limit as usize);
+
+    Ok(similar_songs)
+}
+
+fn calculate_hash_similarity_score(hash1: &str, hash2: &str) -> f32 {
+    let bytes1 = hash1.as_bytes();
+    let bytes2 = hash2.as_bytes();
+    let min_len = bytes1.len().min(bytes2.len());
+    let mut matches = 0;
+
+    for i in 0..min_len {
+        if bytes1[i] == bytes2[i] {
+            matches += 1;
+        }
+    }
+
+    if min_len == 0 {
+        0.0
+    } else {
+        matches as f32 / min_len as f32
+    }
 }

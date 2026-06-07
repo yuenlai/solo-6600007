@@ -12,11 +12,21 @@ export interface Song {
   status?: SongStatus;
 }
 
+export interface SimilarSong {
+  id: string;
+  title: string;
+  artist: string | null;
+  duration_sec: number | null;
+  similarity_score: number;
+  reason: string;
+}
+
 export interface RecognizeResult {
   match_found: boolean;
   song: { id: string; title: string; artist: string | null; duration_sec: number | null } | null;
   confidence: number;
   processing_time_ms: number;
+  similar_songs: SimilarSong[];
 }
 
 export interface SpectrogramData {
@@ -92,4 +102,9 @@ export interface PromoteSampleResponse {
   status: string;
   song_id: string;
   message: string;
+}
+
+export interface SimilarSongsResponse {
+  total: number;
+  songs: SimilarSong[];
 }
