@@ -17,6 +17,9 @@ interface AudioState {
   isOnboardingCompleted: boolean;
   isRecording: boolean;
   audioLevel: number;
+  recordingDuration: number;
+  recordingWaveform: number[];
+  recordingVolume: number;
   isUploading: boolean;
   isRecognizing: boolean;
   recognizeError: string | null;
@@ -69,6 +72,9 @@ interface AudioState {
   setRecognizeResult: (r: RecognizeResult | null) => void;
   setRecording: (v: boolean) => void;
   setAudioLevel: (v: number) => void;
+  setRecordingDuration: (v: number) => void;
+  setRecordingWaveform: (v: number[]) => void;
+  setRecordingVolume: (v: number) => void;
   clearUploadStatus: () => void;
   clearRecognizeStatus: () => void;
   clearBatchUploadStatus: () => void;
@@ -149,6 +155,9 @@ export const useAudioStore = create<AudioState>((set) => ({
   isOnboardingCompleted: false,
   isRecording: false,
   audioLevel: 0,
+  recordingDuration: 0,
+  recordingWaveform: [],
+  recordingVolume: 0,
   isUploading: false,
   isRecognizing: false,
   recognizeError: null,
@@ -509,6 +518,9 @@ export const useAudioStore = create<AudioState>((set) => ({
   setRecognizeResult: (r) => set({ recognizeResult: r }),
   setRecording: (v) => set({ isRecording: v }),
   setAudioLevel: (v) => set({ audioLevel: v }),
+  setRecordingDuration: (v) => set({ recordingDuration: v }),
+  setRecordingWaveform: (v) => set({ recordingWaveform: v }),
+  setRecordingVolume: (v) => set({ recordingVolume: v }),
   clearUploadStatus: () => set({ uploadError: null, uploadSuccess: null }),
   clearRecognizeStatus: () => set({ recognizeError: null, recognizeResult: null }),
   clearBatchUploadStatus: () => set({ batchUploadProgress: [], batchUploadResult: null, batchUploadError: null }),
