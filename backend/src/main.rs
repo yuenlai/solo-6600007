@@ -440,8 +440,13 @@ async fn recognize_audio(
     Ok(HttpResponse::Ok().json(response))
 }
 
-async fn list_songs(pool: web::Data<SqlitePool>) -> HttpResponse {
-    match database::get_all_songs(&pool).await {
+async fn list_songs(
+    query: web::Query<std::collections::HashMap<String, String>>,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    let sort_by = query.get("sort").map(|s| s.as_str()).unwrap_or("created_at");
+
+    match database::get_all_songs_sorted(&pool, sort_by).await {
         Ok(songs) => HttpResponse::Ok().json(songs),
         Err(e) => HttpResponse::InternalServerError().json(ErrorResponse {
             error: "database_error".to_string(),

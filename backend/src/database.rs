@@ -97,11 +97,37 @@ pub async fn insert_song(
 }
 
 pub async fn get_all_songs(pool: &SqlitePool) -> Result<Vec<Song>, sqlx::Error> {
-    let songs = sqlx::query_as::<_, Song>(
-        "SELECT id, title, artist, fingerprint_hash, fingerprint_peaks, fingerprint_robust, duration_sec, created_at, status FROM songs ORDER BY created_at DESC"
-    )
-    .fetch_all(pool)
-    .await?;
+    get_all_songs_sorted(pool, "created_at").await
+}
+
+pub async fn get_all_songs_sorted(pool: &SqlitePool, sort_by: &str) -> Result<Vec<Song>, sqlx::Error> {
+    let songs = match sort_by {
+        "duration" => {
+            sqlx::query_as::<_, Song>(
+                "SELECT id, title, artist, fingerprint_hash, fingerprint_peaks, fingerprint_robust, duration_sec, created_at, status FROM songs ORDER BY CASE WHEN duration_sec IS NULL THEN 1 ELSE 0 END, duration_sec DESC"
+            )
+            .fetch_all(pool)
+            .await?
+        }
+        "popularity" => {
+            sqlx::query_as::<_, Song>(r#"
+                SELECT s.id, s.title, s.artist, s.fingerprint_hash, s.fingerprint_peaks, s.fingerprint_robust, s.duration_sec, s.created_at, s.status
+                FROM songs s
+                LEFT JOIN recognition_history rh ON s.id = rh.song_id AND rh.match_found = 1
+                GROUP BY s.id, s.title, s.artist, s.fingerprint_hash, s.fingerprint_peaks, s.fingerprint_robust, s.duration_sec, s.created_at, s.status
+                ORDER BY COUNT(rh.id) DESC, s.created_at DESC
+            "#)
+            .fetch_all(pool)
+            .await?
+        }
+        _ => {
+            sqlx::query_as::<_, Song>(
+                "SELECT id, title, artist, fingerprint_hash, fingerprint_peaks, fingerprint_robust, duration_sec, created_at, status FROM songs ORDER BY created_at DESC"
+            )
+            .fetch_all(pool)
+            .await?
+        }
+    };
     Ok(songs)
 }
 

@@ -48,7 +48,7 @@ interface AudioState {
   calibrationResult: CalibrationResult | null;
   calibrationRealTimeVolume: number;
   calibrationWaveform: number[];
-  fetchSongs: () => Promise<void>;
+  fetchSongs: (sortBy?: string) => Promise<void>;
   searchSongs: (query: string) => Promise<void>;
   setSearchQuery: (query: string) => void;
   clearSearch: () => void;
@@ -136,6 +136,7 @@ interface AudioState {
   reRecognizeReviewTask: (taskId: string, file: File) => Promise<boolean>;
   updateReviewTaskStatus: (taskId: string, status: string) => Promise<boolean>;
   fetchLowConfidenceHistory: (threshold?: number) => Promise<void>;
+  songSortBy: string;
 }
 
 export const useAudioStore = create<AudioState>((set) => ({
@@ -352,10 +353,11 @@ export const useAudioStore = create<AudioState>((set) => ({
     return { success, failed };
   },
 
-  fetchSongs: async () => {
+  songSortBy: 'created_at',
+  fetchSongs: async (sortBy: string = 'created_at') => {
     try {
-      const response = await axios.get<Song[]>(`${API_BASE}/songs`);
-      set({ songs: response.data });
+      const response = await axios.get<Song[]>(`${API_BASE}/songs?sort=${sortBy}`);
+      set({ songs: response.data, songSortBy: sortBy });
     } catch (error) {
       console.error('Failed to fetch songs:', error);
     }

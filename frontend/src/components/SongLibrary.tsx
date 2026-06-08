@@ -17,16 +17,29 @@ export const SongLibrary: React.FC = () => {
     clearSearch,
     setCurrentSongId, 
     deleteSong, 
-    isDeletingSong 
+    isDeletingSong,
+    songSortBy
   } = useAudioStore();
   const [playingSongId, setPlayingSongId] = useState<string | null>(null);
   const [deletingSongId, setDeletingSongId] = useState<string | null>(null);
   const [localSearchInput, setLocalSearchInput] = useState('');
+  const [localSortBy, setLocalSortBy] = useState<string>(songSortBy || 'created_at');
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const sortOptions = [
+    { value: 'created_at', label: '录入时间' },
+    { value: 'duration', label: '歌曲时长' },
+    { value: 'popularity', label: '识别热度' },
+  ];
+
   useEffect(() => {
-    fetchSongs();
+    fetchSongs(localSortBy);
+  }, [fetchSongs, localSortBy]);
+
+  const handleSortChange = useCallback((sortBy: string) => {
+    setLocalSortBy(sortBy);
+    fetchSongs(sortBy);
   }, [fetchSongs]);
 
   const handleSearchInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -114,7 +127,7 @@ export const SongLibrary: React.FC = () => {
     setDeletingSongId(song.id);
     const success = await deleteSong(song.id);
     if (success) {
-      await fetchSongs();
+      await fetchSongs(localSortBy);
       if (playingSongId === song.id && audioRef.current) {
         audioRef.current.pause();
         audioRef.current.currentTime = 0;
@@ -191,19 +204,43 @@ export const SongLibrary: React.FC = () => {
           <h4 style={{ margin: 0, fontSize: '16px' }}>
             {searchQuery.trim() ? '搜索结果' : '已入库歌曲'} ({displaySongs.length})
           </h4>
-          <button
-            onClick={fetchSongs}
-            style={{
-              padding: '6px 12px',
-              border: '1px solid #ddd',
-              background: '#fff',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              fontSize: '12px',
-            }}
-          >
-            🔄 刷新
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {!searchQuery.trim() && (
+              <div style={{ display: 'flex', border: '1px solid #ddd', borderRadius: '6px', overflow: 'hidden' }}>
+                {sortOptions.map((opt) => (
+                  <button
+                    key={opt.value}
+                    onClick={() => handleSortChange(opt.value)}
+                    style={{
+                      padding: '4px 10px',
+                      border: 'none',
+                      background: localSortBy === opt.value ? '#1976d2' : '#fff',
+                      color: localSortBy === opt.value ? '#fff' : '#666',
+                      cursor: 'pointer',
+                      fontSize: '12px',
+                      transition: 'all 0.2s',
+                      borderRight: opt.value !== 'popularity' ? '1px solid #ddd' : 'none',
+                    }}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            )}
+            <button
+              onClick={() => fetchSongs(localSortBy)}
+              style={{
+                padding: '6px 12px',
+                border: '1px solid #ddd',
+                background: '#fff',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '12px',
+              }}
+            >
+              🔄 刷新
+            </button>
+          </div>
         </div>
         {displaySongs.length === 0 ? (
           <div style={{
