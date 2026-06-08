@@ -5,7 +5,11 @@ import { SongUploader } from './SongUploader';
 
 const API_BASE = 'http://127.0.0.1:8080/api';
 
-export const SongLibrary: React.FC = () => {
+interface SongLibraryProps {
+  onNavigateToRecognize?: () => void;
+}
+
+export const SongLibrary: React.FC<SongLibraryProps> = ({ onNavigateToRecognize }) => {
   const { 
     songs, 
     searchResults, 
@@ -26,6 +30,7 @@ export const SongLibrary: React.FC = () => {
   const [localSortBy, setLocalSortBy] = useState<string>(songSortBy || 'created_at');
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const uploaderRef = useRef<HTMLDivElement | null>(null);
 
   const sortOptions = [
     { value: 'created_at', label: '录入时间' },
@@ -36,6 +41,12 @@ export const SongLibrary: React.FC = () => {
   useEffect(() => {
     fetchSongs(localSortBy);
   }, [fetchSongs, localSortBy]);
+
+  const handleScrollToUploader = useCallback(() => {
+    if (uploaderRef.current) {
+      uploaderRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, []);
 
   const handleSortChange = useCallback((sortBy: string) => {
     setLocalSortBy(sortBy);
@@ -188,7 +199,9 @@ export const SongLibrary: React.FC = () => {
   return (
     <div style={{ padding: '20px', maxWidth: '600px', margin: '0 auto' }}>
       <h3 style={{ margin: '0 0 16px', fontSize: '20px' }}>📚 指纹库</h3>
-      <SongUploader />
+      <div ref={uploaderRef}>
+        <SongUploader />
+      </div>
       <div>
         <div style={{ marginBottom: '16px' }}>
           <div style={{ position: 'relative' }}>
@@ -291,20 +304,16 @@ export const SongLibrary: React.FC = () => {
           </div>
         </div>
         {displaySongs.length === 0 ? (
-          <div style={{
-            textAlign: 'center',
-            padding: '40px 20px',
-            background: '#fff',
-            borderRadius: '8px',
-            color: '#999',
-          }}>
-            <div style={{ fontSize: '40px', marginBottom: '12px' }}>
-              {searchQuery.trim() ? '🔍' : '🎵'}
-            </div>
-            <div>
-              {searchQuery.trim() ? '未找到匹配的歌曲' : '暂无歌曲，上传第一首歌吧！'}
-            </div>
-            {searchQuery.trim() && (
+          searchQuery.trim() ? (
+            <div style={{
+              textAlign: 'center',
+              padding: '40px 20px',
+              background: '#fff',
+              borderRadius: '8px',
+              color: '#999',
+            }}>
+              <div style={{ fontSize: '40px', marginBottom: '12px' }}>🔍</div>
+              <div>未找到匹配的歌曲</div>
               <button
                 onClick={handleClearSearch}
                 style={{
@@ -320,8 +329,92 @@ export const SongLibrary: React.FC = () => {
               >
                 清除搜索
               </button>
-            )}
-          </div>
+            </div>
+          ) : (
+            <div style={{
+              textAlign: 'center',
+              padding: '32px 20px',
+              background: '#fff',
+              borderRadius: '12px',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
+            }}>
+              <div style={{ fontSize: '48px', marginBottom: '12px' }}>📭</div>
+              <div style={{ fontSize: '16px', fontWeight: 600, color: '#333', marginBottom: '6px' }}>
+                指纹库还是空的
+              </div>
+              <div style={{ fontSize: '13px', color: '#888', marginBottom: '24px', lineHeight: '1.6' }}>
+                上传歌曲到指纹库后，即可通过音频识别找到匹配的歌曲
+              </div>
+              <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
+                <button
+                  onClick={handleScrollToUploader}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    padding: '12px 20px',
+                    border: 'none',
+                    background: '#1976d2',
+                    color: '#fff',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    fontSize: '14px',
+                    fontWeight: 500,
+                    transition: 'background 0.2s',
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = '#1565c0'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = '#1976d2'; }}
+                >
+                  <span style={{ fontSize: '16px' }}>📤</span>
+                  上传歌曲
+                </button>
+                {onNavigateToRecognize && (
+                  <button
+                    onClick={onNavigateToRecognize}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      padding: '12px 20px',
+                      border: '1px solid #ddd',
+                      background: '#fff',
+                      color: '#555',
+                      borderRadius: '8px',
+                      cursor: 'pointer',
+                      fontSize: '14px',
+                      fontWeight: 500,
+                      transition: 'all 0.2s',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.borderColor = '#1976d2';
+                      e.currentTarget.style.color = '#1976d2';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.borderColor = '#ddd';
+                      e.currentTarget.style.color = '#555';
+                    }}
+                  >
+                    <span style={{ fontSize: '16px' }}>🎤</span>
+                    前往识别
+                  </button>
+                )}
+              </div>
+              <div style={{
+                marginTop: '20px',
+                padding: '12px 16px',
+                background: '#f5f5f5',
+                borderRadius: '8px',
+                textAlign: 'left',
+              }}>
+                <div style={{ fontSize: '12px', color: '#999', marginBottom: '6px', fontWeight: 500 }}>使用提示</div>
+                <div style={{ fontSize: '12px', color: '#777', lineHeight: '1.8' }}>
+                  <div>1. 点击「上传歌曲」上传 WAV 音频文件到指纹库</div>
+                  <div>2. 上传完成后系统自动提取音频指纹特征</div>
+                  <div>3. 点击「前往识别」录制音频进行歌曲识别</div>
+                </div>
+              </div>
+            </div>
+          )
         ) : (
           displaySongs.map(s => {
             const statusStyle = getStatusStyle(s.status);

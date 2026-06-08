@@ -797,7 +797,7 @@ const App: React.FC = () => {
               </div>
             )}
             {tab === 'compare' && <CompareRecorder />}
-            {tab === 'library' && <SongLibrary />}
+            {tab === 'library' && <SongLibrary onNavigateToRecognize={() => setTab('recognize')} />}
             {tab === 'artists' && (
               <ArtistList
                 onSelectArtist={(artistName) => {
