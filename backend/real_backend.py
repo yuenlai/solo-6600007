@@ -399,6 +399,103 @@ def upload_song():
             'message': f'Failed to process audio file: {str(e)}'
         }), 400
 
+@app.route('/api/songs/batch-upload', methods=['POST'])
+def batch_upload_songs():
+    results = []
+    success_count = 0
+    failed_count = 0
+    
+    files = []
+    for key in request.files.keys():
+        if key.startswith('file_'):
+            idx = int(key.split('_')[1])
+            files.append((idx, request.files[key]))
+    
+    files.sort(key=lambda x: x[0])
+    
+    for idx, file in files:
+        file_name = file.filename or f'song_{idx}.wav'
+        title = request.form.get(f'title_{idx}', '').strip()
+        if not title:
+            title = os.path.splitext(file_name)[0]
+        artist = request.form.get(f'artist_{idx}', '').strip() or None
+        
+        progress = {
+            'file_index': idx,
+            'file_name': file_name,
+            'status': 'processing',
+            'progress': 25,
+            'song': None,
+            'error': None
+        }
+        
+        try:
+            wav_bytes = file.read()
+            if not wav_bytes:
+                progress['status'] = 'failed'
+                progress['progress'] = 100
+                progress['error'] = 'Empty audio file'
+                failed_count += 1
+                results.append(progress)
+                continue
+            
+            progress['progress'] = 50
+            
+            fingerprint_hash, duration_sec, peaks, robust = process_audio(wav_bytes)
+            
+            progress['progress'] = 75
+            
+            peaks_json = json.dumps(peaks) if peaks else None
+            robust_json = json.dumps(robust) if robust else None
+            duration_sec_int = max(1, int(duration_sec))
+            
+            song_id = str(uuid.uuid4())
+            created_at = datetime.now(timezone.utc).isoformat()
+            
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO songs (id, title, artist, fingerprint_hash, fingerprint_peaks, 
+                                  fingerprint_robust, duration_sec, created_at, status, source)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'completed', 'batch_import')
+            ''', (song_id, title, artist, fingerprint_hash, peaks_json, robust_json, 
+                  duration_sec_int, created_at))
+            conn.commit()
+            conn.close()
+            
+            progress['status'] = 'completed'
+            progress['progress'] = 100
+            progress['song'] = {
+                'id': song_id,
+                'title': title,
+                'artist': artist,
+                'fingerprint_hash': fingerprint_hash,
+                'duration_sec': duration_sec_int,
+                'status': 'success',
+                'message': 'Song uploaded and fingerprinted successfully'
+            }
+            success_count += 1
+            
+            print(f"✅ [{idx+1}/{len(files)}] Uploaded: {title}")
+            
+        except Exception as e:
+            print(f"❌ [{idx+1}/{len(files)}] Failed: {file_name} - {str(e)}")
+            import traceback
+            traceback.print_exc()
+            progress['status'] = 'failed'
+            progress['progress'] = 100
+            progress['error'] = str(e)
+            failed_count += 1
+        
+        results.append(progress)
+    
+    return jsonify({
+        'total': len(files),
+        'success': success_count,
+        'failed': failed_count,
+        'results': results
+    })
+
 @app.route('/api/recognize', methods=['POST'])
 def recognize():
     if 'file' not in request.files:
@@ -543,8 +640,16 @@ def get_history():
     conn.close()
     return jsonify(history)
 
+RESERVED_SONG_IDS = {'search', 'upload', 'batch-upload', 'pending'}
+
 @app.route('/api/songs/<song_id>', methods=['GET'])
 def get_song_detail(song_id):
+    if song_id in RESERVED_SONG_IDS:
+        return jsonify({
+            'error': 'invalid_song_id',
+            'message': f'Invalid song ID: {song_id}'
+        }), 400
+    
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('''
@@ -566,6 +671,11 @@ def get_song_detail(song_id):
 
 @app.route('/api/songs/<song_id>/history', methods=['GET'])
 def get_song_history(song_id):
+    if song_id in RESERVED_SONG_IDS:
+        return jsonify({
+            'error': 'invalid_song_id',
+            'message': f'Invalid song ID: {song_id}'
+        }), 400
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('''
@@ -588,103 +698,6 @@ def get_song_history(song_id):
         })
     conn.close()
     return jsonify(history)
-
-@app.route('/api/songs/batch-upload', methods=['POST'])
-def batch_upload_songs():
-    results = []
-    success_count = 0
-    failed_count = 0
-    
-    files = []
-    for key in request.files.keys():
-        if key.startswith('file_'):
-            idx = int(key.split('_')[1])
-            files.append((idx, request.files[key]))
-    
-    files.sort(key=lambda x: x[0])
-    
-    for idx, file in files:
-        file_name = file.filename or f'song_{idx}.wav'
-        title = request.form.get(f'title_{idx}', '').strip()
-        if not title:
-            title = os.path.splitext(file_name)[0]
-        artist = request.form.get(f'artist_{idx}', '').strip() or None
-        
-        progress = {
-            'file_index': idx,
-            'file_name': file_name,
-            'status': 'processing',
-            'progress': 25,
-            'song': None,
-            'error': None
-        }
-        
-        try:
-            wav_bytes = file.read()
-            if not wav_bytes:
-                progress['status'] = 'failed'
-                progress['progress'] = 100
-                progress['error'] = 'Empty audio file'
-                failed_count += 1
-                results.append(progress)
-                continue
-            
-            progress['progress'] = 50
-            
-            fingerprint_hash, duration_sec, peaks, robust = process_audio(wav_bytes)
-            
-            progress['progress'] = 75
-            
-            peaks_json = json.dumps(peaks) if peaks else None
-            robust_json = json.dumps(robust) if robust else None
-            duration_sec_int = max(1, int(duration_sec))
-            
-            song_id = str(uuid.uuid4())
-            created_at = datetime.now(timezone.utc).isoformat()
-            
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO songs (id, title, artist, fingerprint_hash, fingerprint_peaks, 
-                                  fingerprint_robust, duration_sec, created_at, status, source)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'completed', 'batch_import')
-            ''', (song_id, title, artist, fingerprint_hash, peaks_json, robust_json, 
-                  duration_sec_int, created_at))
-            conn.commit()
-            conn.close()
-            
-            progress['status'] = 'completed'
-            progress['progress'] = 100
-            progress['song'] = {
-                'id': song_id,
-                'title': title,
-                'artist': artist,
-                'fingerprint_hash': fingerprint_hash,
-                'duration_sec': duration_sec_int,
-                'status': 'success',
-                'message': 'Song uploaded and fingerprinted successfully'
-            }
-            success_count += 1
-            
-            print(f"✅ [{idx+1}/{len(files)}] Uploaded: {title}")
-            
-        except Exception as e:
-            print(f"❌ [{idx+1}/{len(files)}] Failed: {file_name} - {str(e)}")
-            import traceback
-            traceback.print_exc()
-            progress['status'] = 'failed'
-            progress['progress'] = 100
-            progress['error'] = str(e)
-            failed_count += 1
-        
-        results.append(progress)
-    
-    return jsonify({
-        'total': len(files),
-        'success': success_count,
-        'failed': failed_count,
-        'results': results
-    })
 
 if __name__ == '__main__':
     init_db()
