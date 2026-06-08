@@ -173,8 +173,22 @@ const getNextSteps = (result: RecognizeResult) => {
   return steps;
 };
 
+const LAST_TAB_KEY = 'audioid_last_tab';
+
 const App: React.FC = () => {
-  const [tab, setTab] = useState<'recognize' | 'compare' | 'library' | 'artists' | 'queue' | 'history' | 'failed' | 'playlists' | 'drafts' | 'review'>('recognize');
+  const [tab, setTabState] = useState<'recognize' | 'compare' | 'library' | 'artists' | 'queue' | 'history' | 'failed' | 'playlists' | 'drafts' | 'review'>(() => {
+    try {
+      const saved = localStorage.getItem(LAST_TAB_KEY);
+      if (saved && ['recognize','compare','library','artists','queue','history','failed','playlists','drafts','review'].includes(saved)) {
+        return saved as any;
+      }
+    } catch {}
+    return 'recognize';
+  });
+  const setTab = (t: typeof tab) => {
+    setTabState(t);
+    try { localStorage.setItem(LAST_TAB_KEY, t); } catch {}
+  };
   const { 
     recognizeResult, 
     setRecognizeResult,

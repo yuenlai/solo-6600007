@@ -6,6 +6,7 @@ const API_BASE = 'http://127.0.0.1:8080/api';
 
 const ONBOARDING_KEY = 'audioid_onboarding_completed';
 const OFFLINE_DRAFTS_KEY = 'audioid_offline_drafts';
+const LAST_RECOGNIZE_KEY = 'audioid_last_recognize_result';
 
 interface AudioState {
   songs: Song[];
@@ -151,7 +152,7 @@ export const useAudioStore = create<AudioState>((set) => ({
   searchQuery: '',
   isSearching: false,
   pendingSongs: [],
-  recognizeResult: null,
+  recognizeResult: (() => { try { const s = localStorage.getItem(LAST_RECOGNIZE_KEY); return s ? JSON.parse(s) : null; } catch { return null; } })(),
   isOnboardingCompleted: false,
   isRecording: false,
   audioLevel: 0,
@@ -485,6 +486,7 @@ export const useAudioStore = create<AudioState>((set) => ({
 
   recognizeFile: async (file: File) => {
     set({ isRecognizing: true, recognizeError: null, recognizeResult: null });
+    try { localStorage.removeItem(LAST_RECOGNIZE_KEY); } catch {}
     try {
       const formData = new FormData();
       formData.append('file', file);
@@ -496,6 +498,7 @@ export const useAudioStore = create<AudioState>((set) => ({
       );
 
       set({ isRecognizing: false, recognizeResult: response.data });
+      try { localStorage.setItem(LAST_RECOGNIZE_KEY, JSON.stringify(response.data)); } catch {}
       return true;
     } catch (error: any) {
       const isNetworkError = !error.response || error.code === 'ERR_NETWORK' || error.message.includes('Network');
@@ -515,14 +518,20 @@ export const useAudioStore = create<AudioState>((set) => ({
   },
 
   setSongs: (songs) => set({ songs }),
-  setRecognizeResult: (r) => set({ recognizeResult: r }),
+  setRecognizeResult: (r) => {
+    try { if (r) { localStorage.setItem(LAST_RECOGNIZE_KEY, JSON.stringify(r)); } else { localStorage.removeItem(LAST_RECOGNIZE_KEY); } } catch {}
+    set({ recognizeResult: r });
+  },
   setRecording: (v) => set({ isRecording: v }),
   setAudioLevel: (v) => set({ audioLevel: v }),
   setRecordingDuration: (v) => set({ recordingDuration: v }),
   setRecordingWaveform: (v) => set({ recordingWaveform: v }),
   setRecordingVolume: (v) => set({ recordingVolume: v }),
   clearUploadStatus: () => set({ uploadError: null, uploadSuccess: null }),
-  clearRecognizeStatus: () => set({ recognizeError: null, recognizeResult: null }),
+  clearRecognizeStatus: () => {
+    try { localStorage.removeItem(LAST_RECOGNIZE_KEY); } catch {}
+    set({ recognizeError: null, recognizeResult: null });
+  },
   clearBatchUploadStatus: () => set({ batchUploadProgress: [], batchUploadResult: null, batchUploadError: null }),
 
   fetchHistory: async () => {
