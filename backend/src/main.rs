@@ -31,12 +31,30 @@ struct UploadResponse {
 }
 
 #[derive(Serialize)]
+struct RemediationAction {
+    action_type: String,
+    label: String,
+    description: String,
+    target: Option<String>,
+}
+
+#[derive(Serialize)]
+struct FailureInfo {
+    reason_code: String,
+    reason_message: String,
+    details: Vec<String>,
+    remediation: Vec<RemediationAction>,
+}
+
+#[derive(Serialize)]
 struct RecognizeResponse {
     match_found: bool,
     song: Option<SongMatch>,
     confidence: f32,
     processing_time_ms: u64,
     similar_songs: Vec<SimilarSong>,
+    failure_info: Option<FailureInfo>,
+    sample_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -362,6 +380,10 @@ async fn recognize_audio(
         }
     }
 
+    let input_peaks_count = input_peaks.len();
+    let input_robust_count = input_robust.len();
+    let songs_count = songs.len();
+
     let processing_time_ms = start.elapsed().as_millis() as u64;
     let confidence_threshold = 0.15;
 
@@ -395,6 +417,8 @@ async fn recognize_audio(
                 confidence: confidence.min(1.0),
                 processing_time_ms,
                 similar_songs,
+                failure_info: None,
+                sample_id: None,
             }
         }
         _ => {
@@ -427,12 +451,111 @@ async fn recognize_audio(
                 best_confidence,
             ).await;
 
+            let (reason_code, reason_message, details) = if songs_count == 0 {
+                (
+                    "empty_library".to_string(),
+                    "曲库为空，无法进行匹配".to_string(),
+                    vec![
+                        "当前指纹库中没有任何歌曲".to_string(),
+                        "需要先上传歌曲到指纹库后才能进行识别".to_string(),
+                    ],
+                )
+            } else if input_peaks_count < 5 && input_robust_count < 3 {
+                (
+                    "audio_too_short".to_string(),
+                    "音频片段过短，无法提取足够的指纹特征".to_string(),
+                    vec![
+                        format!("仅提取到 {} 个频谱峰和 {} 个鲁棒特征", input_peaks_count, input_robust_count),
+                        "音频太短可能导致指纹信息不足，无法准确匹配".to_string(),
+                        "建议录制至少 3 秒以上的音频片段".to_string(),
+                    ],
+                )
+            } else if input_peaks_count < 20 && input_robust_count < 10 {
+                (
+                    "weak_features".to_string(),
+                    "音频特征较弱，提取的指纹信息不够丰富".to_string(),
+                    vec![
+                        format!("提取到 {} 个频谱峰和 {} 个鲁棒特征", input_peaks_count, input_robust_count),
+                        "音频可能过于安静或内容单调，导致特征点不足".to_string(),
+                        "建议在安静环境中录制更清晰的音频".to_string(),
+                    ],
+                )
+            } else if best_confidence > 0.0 && best_confidence < confidence_threshold {
+                (
+                    "near_match".to_string(),
+                    "存在相似但未达阈值的候选匹配".to_string(),
+                    vec![
+                        format!("最接近的匹配置信度为 {:.1}%，未达到 {:.1}% 的阈值", best_confidence * 100.0, confidence_threshold * 100.0),
+                        "可能是同一首歌的不同版本、翻唱或音质较差的录音".to_string(),
+                        "也可能是不同但风格相似的歌曲".to_string(),
+                    ],
+                )
+            } else {
+                (
+                    "no_similar_song".to_string(),
+                    "曲库中没有与该音频匹配的歌曲".to_string(),
+                    vec![
+                        format!("在 {} 首歌曲中未发现相似音频", songs_count),
+                        "该音频可能是一首尚未录入指纹库的歌曲".to_string(),
+                        "也可能是录音质量或环境噪音导致指纹特征偏差过大".to_string(),
+                    ],
+                )
+            };
+
+            let mut remediation = Vec::new();
+
+            remediation.push(RemediationAction {
+                action_type: "promote_sample".to_string(),
+                label: "录入为新歌曲".to_string(),
+                description: "将此音频样本直接提升为指纹库中的新歌曲".to_string(),
+                target: Some(sample_id.clone()),
+            });
+
+            if reason_code == "audio_too_short" || reason_code == "weak_features" {
+                remediation.push(RemediationAction {
+                    action_type: "re_record".to_string(),
+                    label: "重新录制".to_string(),
+                    description: "在更安静的环境中录制更长、更清晰的音频片段".to_string(),
+                    target: None,
+                });
+            }
+
+            remediation.push(RemediationAction {
+                action_type: "upload_song".to_string(),
+                label: "上传歌曲到曲库".to_string(),
+                description: "如果知道这首歌的信息，可以直接上传到指纹库".to_string(),
+                target: None,
+            });
+
+            if reason_code == "near_match" {
+                remediation.push(RemediationAction {
+                    action_type: "review_task".to_string(),
+                    label: "创建复检任务".to_string(),
+                    description: "对此次识别结果创建人工复检任务，进一步确认".to_string(),
+                    target: Some(history_id.clone()),
+                });
+            }
+
+            remediation.push(RemediationAction {
+                action_type: "view_failed_samples".to_string(),
+                label: "查看失败样本".to_string(),
+                description: "在失败样本列表中管理和复核所有未识别的音频".to_string(),
+                target: None,
+            });
+
             RecognizeResponse {
                 match_found: false,
                 song: None,
                 confidence: 0.0,
                 processing_time_ms,
                 similar_songs: Vec::new(),
+                failure_info: Some(FailureInfo {
+                    reason_code,
+                    reason_message,
+                    details,
+                    remediation,
+                }),
+                sample_id: Some(sample_id),
             }
         }
     };
@@ -1162,6 +1285,10 @@ async fn re_recognize_review_task(
         }
     }
 
+    let input_peaks_count = input_peaks.len();
+    let input_robust_count = input_robust.len();
+    let songs_count = songs.len();
+
     let processing_time_ms = start.elapsed().as_millis() as u64;
     let confidence_threshold = 0.15;
 
@@ -1196,6 +1323,8 @@ async fn re_recognize_review_task(
                     confidence: confidence.min(1.0),
                     processing_time_ms,
                     similar_songs,
+                    failure_info: None,
+                    sample_id: None,
                 },
                 Some(format!("{}|{}", song.id, song.title)),
                 Some(confidence.min(1.0)),
@@ -1215,6 +1344,69 @@ async fn re_recognize_review_task(
                 Some("review"),
             ).await;
 
+            let best_confidence = best_match.as_ref().map(|(_, c)| *c).unwrap_or(0.0);
+
+            let (reason_code, reason_message, details) = if songs_count == 0 {
+                (
+                    "empty_library".to_string(),
+                    "曲库为空，无法进行匹配".to_string(),
+                    vec![
+                        "当前指纹库中没有任何歌曲".to_string(),
+                        "需要先上传歌曲到指纹库后才能进行识别".to_string(),
+                    ],
+                )
+            } else if input_peaks_count < 5 && input_robust_count < 3 {
+                (
+                    "audio_too_short".to_string(),
+                    "音频片段过短，无法提取足够的指纹特征".to_string(),
+                    vec![
+                        format!("仅提取到 {} 个频谱峰和 {} 个鲁棒特征", input_peaks_count, input_robust_count),
+                        "音频太短可能导致指纹信息不足，无法准确匹配".to_string(),
+                    ],
+                )
+            } else if input_peaks_count < 20 && input_robust_count < 10 {
+                (
+                    "weak_features".to_string(),
+                    "音频特征较弱，提取的指纹信息不够丰富".to_string(),
+                    vec![
+                        format!("提取到 {} 个频谱峰和 {} 个鲁棒特征", input_peaks_count, input_robust_count),
+                        "音频可能过于安静或内容单调，导致特征点不足".to_string(),
+                    ],
+                )
+            } else if best_confidence > 0.0 && best_confidence < confidence_threshold {
+                (
+                    "near_match".to_string(),
+                    "存在相似但未达阈值的候选匹配".to_string(),
+                    vec![
+                        format!("最接近的匹配置信度为 {:.1}%，未达到 {:.1}% 的阈值", best_confidence * 100.0, confidence_threshold * 100.0),
+                        "可能是同一首歌的不同版本或音质较差的录音".to_string(),
+                    ],
+                )
+            } else {
+                (
+                    "no_similar_song".to_string(),
+                    "曲库中没有与该音频匹配的歌曲".to_string(),
+                    vec![
+                        format!("在 {} 首歌曲中未发现相似音频", songs_count),
+                        "该音频可能是一首尚未录入指纹库的歌曲".to_string(),
+                    ],
+                )
+            };
+
+            let mut remediation = Vec::new();
+            remediation.push(RemediationAction {
+                action_type: "upload_song".to_string(),
+                label: "上传歌曲到曲库".to_string(),
+                description: "如果知道这首歌的信息，可以直接上传到指纹库".to_string(),
+                target: None,
+            });
+            remediation.push(RemediationAction {
+                action_type: "view_failed_samples".to_string(),
+                label: "查看失败样本".to_string(),
+                description: "在失败样本列表中管理和复核所有未识别的音频".to_string(),
+                target: None,
+            });
+
             (
                 RecognizeResponse {
                     match_found: false,
@@ -1222,6 +1414,13 @@ async fn re_recognize_review_task(
                     confidence: 0.0,
                     processing_time_ms,
                     similar_songs: Vec::new(),
+                    failure_info: Some(FailureInfo {
+                        reason_code,
+                        reason_message,
+                        details,
+                        remediation,
+                    }),
+                    sample_id: None,
                 },
                 Some("no_match".to_string()),
                 Some(0.0),

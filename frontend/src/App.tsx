@@ -16,6 +16,23 @@ import { ArtistDetail } from './components/ArtistDetail';
 import { useAudioStore } from './store/audio';
 import { RecognizeResult } from './types';
 
+const getReasonCodeInfo = (reasonCode: string) => {
+  switch (reasonCode) {
+    case 'empty_library':
+      return { icon: '📭', color: '#5c6bc0', bgColor: '#e8eaf6' };
+    case 'audio_too_short':
+      return { icon: '⏱️', color: '#e65100', bgColor: '#fff3e0' };
+    case 'weak_features':
+      return { icon: '📉', color: '#f57c00', bgColor: '#fff8e1' };
+    case 'near_match':
+      return { icon: '🎯', color: '#7b1fa2', bgColor: '#f3e5f5' };
+    case 'no_similar_song':
+      return { icon: '🔍', color: '#c62828', bgColor: '#ffebee' };
+    default:
+      return { icon: '❓', color: '#757575', bgColor: '#f5f5f5' };
+  }
+};
+
 const getMatchStatusInfo = (result: RecognizeResult) => {
   if (result.match_found) {
     const confidence = result.confidence;
@@ -42,24 +59,29 @@ const getMatchStatusInfo = (result: RecognizeResult) => {
       };
     }
   } else {
+    const reasonInfo = getReasonCodeInfo(result.failure_info?.reason_code || '');
     return {
-      label: '未找到匹配',
-      description: '数据库中未找到匹配的音频指纹',
-      color: '#c62828',
-      bgColor: '#ffebee'
+      label: result.failure_info?.reason_message || '未找到匹配',
+      description: result.failure_info?.details[0] || '数据库中未找到匹配的音频指纹',
+      color: reasonInfo.color,
+      bgColor: reasonInfo.bgColor
     };
   }
 };
 
-const getConfidenceInterpretation = (confidence: number, matchFound: boolean) => {
+const getConfidenceInterpretation = (confidence: number, matchFound: boolean, failureInfo?: { reason_code: string; reason_message: string; details: string[] } | null) => {
   if (!matchFound) {
+    const reasonSpecifics: string[] = [];
+    if (failureInfo) {
+      reasonSpecifics.push(...failureInfo.details);
+    } else {
+      reasonSpecifics.push('可能原因：音频质量差、背景噪音大、歌曲未录入曲库');
+      reasonSpecifics.push('建议：尝试使用更清晰的音频片段，或检查歌曲是否已添加到曲库');
+    }
     return {
       level: '无匹配',
-      description: '未能在曲库中找到匹配的歌曲',
-      details: [
-        '可能原因：音频质量差、背景噪音大、歌曲未录入曲库',
-        '建议：尝试使用更清晰的音频片段，或检查歌曲是否已添加到曲库'
-      ]
+      description: failureInfo?.reason_message || '未能在曲库中找到匹配的歌曲',
+      details: reasonSpecifics
     };
   }
   
@@ -138,6 +160,9 @@ const getNextSteps = (result: RecognizeResult) => {
       steps.push('📚 点击歌曲可查看详细信息和识别历史');
     }
   } else {
+    if (result.failure_info?.remediation && result.failure_info.remediation.length > 0) {
+      return result.failure_info.remediation.map(a => `👉 ${a.description}`);
+    }
     steps.push('🎤 尝试录制更长、更清晰的音频片段');
     steps.push('🔇 确保录音环境安静，减少背景噪音');
     steps.push('📚 检查歌曲是否已添加到指纹库中');
@@ -163,10 +188,30 @@ const App: React.FC = () => {
     loadOfflineDrafts,
     offlineDrafts,
     syncOfflineDrafts,
+    promoteFailedSample,
+    fetchFailedSamples,
+    createReviewTask,
   } = useAudioStore();
   const [showAddToPlaylist, setShowAddToPlaylist] = useState(false);
   const [addToPlaylistSong, setAddToPlaylistSong] = useState<{ id: string; title: string } | null>(null);
   const [currentArtistName, setCurrentArtistName] = useState<string | null>(null);
+  const [promoteSampleId, setPromoteSampleId] = useState<string | null>(null);
+  const [promoteTitle, setPromoteTitle] = useState('');
+  const [promoteArtist, setPromoteArtist] = useState('');
+  const [isPromoting, setIsPromoting] = useState(false);
+
+  const handlePromoteSubmit = async () => {
+    if (!promoteSampleId || !promoteTitle.trim()) return;
+    setIsPromoting(true);
+    const ok = await promoteFailedSample(promoteSampleId, promoteTitle.trim(), promoteArtist.trim() || null);
+    setIsPromoting(false);
+    if (ok) {
+      setPromoteSampleId(null);
+      setPromoteTitle('');
+      setPromoteArtist('');
+      setRecognizeResult(null);
+    }
+  };
 
   const pendingCount = pendingSongs.length;
   const failedCount = failedSamples.length;
@@ -293,7 +338,9 @@ const App: React.FC = () => {
                         similar_songs: [
                           { id: 'sim-1', title: '相似歌曲1', artist: '艺术家A', duration_sec: 200, similarity_score: 0.72, reason: '旋律相似' },
                           { id: 'sim-2', title: '相似歌曲2', artist: '艺术家B', duration_sec: 195, similarity_score: 0.65, reason: '节奏相似' }
-                        ]
+                        ],
+                        failure_info: null,
+                        sample_id: null,
                       })}
                       style={{ padding: '8px 16px', fontSize: '12px', borderRadius: '6px', border: 'none', background: '#2e7d32', color: '#fff', cursor: 'pointer' }}
                     >
@@ -307,7 +354,9 @@ const App: React.FC = () => {
                         processing_time_ms: 150,
                         similar_songs: [
                           { id: 'sim-3', title: '相似歌曲3', artist: '艺术家C', duration_sec: 188, similarity_score: 0.55, reason: '同流派' }
-                        ]
+                        ],
+                        failure_info: null,
+                        sample_id: null,
                       })}
                       style={{ padding: '8px 16px', fontSize: '12px', borderRadius: '6px', border: 'none', background: '#f57c00', color: '#fff', cursor: 'pointer' }}
                     >
@@ -315,15 +364,25 @@ const App: React.FC = () => {
                     </button>
                     <button
                       onClick={() => setRecognizeResult({
-                        match_found: true,
-                        song: { id: 'test-3', title: '测试歌曲 - 低置信度', artist: '未知艺术家', duration_sec: 160 },
-                        confidence: 0.18,
-                        processing_time_ms: 200,
-                        similar_songs: []
+                        match_found: false,
+                        song: null,
+                        confidence: 0,
+                        processing_time_ms: 180,
+                        similar_songs: [],
+                        failure_info: {
+                          reason_code: 'empty_library',
+                          reason_message: '曲库为空，无法进行匹配',
+                          details: ['当前指纹库中没有任何歌曲', '需要先上传歌曲到指纹库后才能进行识别'],
+                          remediation: [
+                            { action_type: 'upload_song', label: '上传歌曲到曲库', description: '如果知道这首歌的信息，可以直接上传到指纹库', target: null },
+                            { action_type: 'view_failed_samples', label: '查看失败样本', description: '在失败样本列表中管理和复核所有未识别的音频', target: null },
+                          ],
+                        },
+                        sample_id: 'test-sample-1',
                       })}
-                      style={{ padding: '8px 16px', fontSize: '12px', borderRadius: '6px', border: 'none', background: '#e65100', color: '#fff', cursor: 'pointer' }}
+                      style={{ padding: '8px 16px', fontSize: '12px', borderRadius: '6px', border: 'none', background: '#5c6bc0', color: '#fff', cursor: 'pointer' }}
                     >
-                      低置信度 (18%)
+                      曲库为空
                     </button>
                     <button
                       onClick={() => setRecognizeResult({
@@ -331,11 +390,70 @@ const App: React.FC = () => {
                         song: null,
                         confidence: 0,
                         processing_time_ms: 180,
-                        similar_songs: []
+                        similar_songs: [],
+                        failure_info: {
+                          reason_code: 'audio_too_short',
+                          reason_message: '音频片段过短，无法提取足够的指纹特征',
+                          details: ['仅提取到 3 个频谱峰和 2 个鲁棒特征', '音频太短可能导致指纹信息不足，无法准确匹配', '建议录制至少 3 秒以上的音频片段'],
+                          remediation: [
+                            { action_type: 'promote_sample', label: '录入为新歌曲', description: '将此音频样本直接提升为指纹库中的新歌曲', target: 'test-sample-2' },
+                            { action_type: 're_record', label: '重新录制', description: '在更安静的环境中录制更长、更清晰的音频片段', target: null },
+                            { action_type: 'upload_song', label: '上传歌曲到曲库', description: '如果知道这首歌的信息，可以直接上传到指纹库', target: null },
+                            { action_type: 'view_failed_samples', label: '查看失败样本', description: '在失败样本列表中管理和复核所有未识别的音频', target: null },
+                          ],
+                        },
+                        sample_id: 'test-sample-2',
+                      })}
+                      style={{ padding: '8px 16px', fontSize: '12px', borderRadius: '6px', border: 'none', background: '#e65100', color: '#fff', cursor: 'pointer' }}
+                    >
+                      音频过短
+                    </button>
+                    <button
+                      onClick={() => setRecognizeResult({
+                        match_found: false,
+                        song: null,
+                        confidence: 0,
+                        processing_time_ms: 180,
+                        similar_songs: [],
+                        failure_info: {
+                          reason_code: 'near_match',
+                          reason_message: '存在相似但未达阈值的候选匹配',
+                          details: ['最接近的匹配置信度为 12.0%，未达到 15.0% 的阈值', '可能是同一首歌的不同版本、翻唱或音质较差的录音', '也可能是不同但风格相似的歌曲'],
+                          remediation: [
+                            { action_type: 'promote_sample', label: '录入为新歌曲', description: '将此音频样本直接提升为指纹库中的新歌曲', target: 'test-sample-3' },
+                            { action_type: 'upload_song', label: '上传歌曲到曲库', description: '如果知道这首歌的信息，可以直接上传到指纹库', target: null },
+                            { action_type: 'review_task', label: '创建复检任务', description: '对此次识别结果创建人工复检任务，进一步确认', target: 'test-history-1' },
+                            { action_type: 'view_failed_samples', label: '查看失败样本', description: '在失败样本列表中管理和复核所有未识别的音频', target: null },
+                          ],
+                        },
+                        sample_id: 'test-sample-3',
+                      })}
+                      style={{ padding: '8px 16px', fontSize: '12px', borderRadius: '6px', border: 'none', background: '#7b1fa2', color: '#fff', cursor: 'pointer' }}
+                    >
+                      接近匹配
+                    </button>
+                    <button
+                      onClick={() => setRecognizeResult({
+                        match_found: false,
+                        song: null,
+                        confidence: 0,
+                        processing_time_ms: 180,
+                        similar_songs: [],
+                        failure_info: {
+                          reason_code: 'no_similar_song',
+                          reason_message: '曲库中没有与该音频匹配的歌曲',
+                          details: ['在 15 首歌曲中未发现相似音频', '该音频可能是一首尚未录入指纹库的歌曲', '也可能是录音质量或环境噪音导致指纹特征偏差过大'],
+                          remediation: [
+                            { action_type: 'promote_sample', label: '录入为新歌曲', description: '将此音频样本直接提升为指纹库中的新歌曲', target: 'test-sample-4' },
+                            { action_type: 'upload_song', label: '上传歌曲到曲库', description: '如果知道这首歌的信息，可以直接上传到指纹库', target: null },
+                            { action_type: 'view_failed_samples', label: '查看失败样本', description: '在失败样本列表中管理和复核所有未识别的音频', target: null },
+                          ],
+                        },
+                        sample_id: 'test-sample-4',
                       })}
                       style={{ padding: '8px 16px', fontSize: '12px', borderRadius: '6px', border: 'none', background: '#c62828', color: '#fff', cursor: 'pointer' }}
                     >
-                      未找到匹配
+                      无匹配歌曲
                     </button>
                     <button
                       onClick={() => setRecognizeResult(null)}
@@ -350,14 +468,42 @@ const App: React.FC = () => {
                   <div style={{ maxWidth: '560px', margin: '0 auto' }}>
                     {(() => {
                       const matchStatus = getMatchStatusInfo(recognizeResult);
-                      const confidenceInfo = getConfidenceInterpretation(recognizeResult.confidence, recognizeResult.match_found);
+                      const reasonInfo = getReasonCodeInfo(recognizeResult.failure_info?.reason_code || '');
+                      const confidenceInfo = getConfidenceInterpretation(recognizeResult.confidence, recognizeResult.match_found, recognizeResult.failure_info);
                       const nextSteps = getNextSteps(recognizeResult);
+                      const hasRemediation = recognizeResult.failure_info?.remediation && recognizeResult.failure_info.remediation.length > 0;
+                      
+                      const handleRemediationAction = (action: { action_type: string; label: string; description: string; target: string | null }) => {
+                        switch (action.action_type) {
+                          case 'promote_sample':
+                            if (action.target) {
+                              setPromoteSampleId(action.target);
+                              setPromoteTitle('');
+                              setPromoteArtist('');
+                            }
+                            break;
+                          case 're_record':
+                            break;
+                          case 'upload_song':
+                            setTab('library');
+                            break;
+                          case 'review_task':
+                            if (action.target) {
+                              createReviewTask(action.target, '未识别命中-自动创建');
+                            }
+                            break;
+                          case 'view_failed_samples':
+                            fetchFailedSamples();
+                            setTab('failed');
+                            break;
+                        }
+                      };
                       
                       return (
                         <>
                           <div style={{ padding: '24px', borderRadius: '12px',
                             background: matchStatus.bgColor, textAlign: 'center' }}>
-                            <div style={{ fontSize: '40px' }}>{recognizeResult.match_found ? '✅' : '❌'}</div>
+                            <div style={{ fontSize: '40px' }}>{recognizeResult.match_found ? '✅' : reasonInfo.icon}</div>
                             {recognizeResult.match_found && recognizeResult.song ? (
                               <>
                                 <div style={{ fontWeight: 600, fontSize: '20px', margin: '12px 0 4px' }}>{recognizeResult.song.title}</div>
@@ -390,14 +536,119 @@ const App: React.FC = () => {
                               </>
                             ) : (
                               <>
-                                <div style={{ fontWeight: 600, fontSize: '20px', margin: '12px 0 4px' }}>未找到匹配歌曲</div>
-                                <div style={{ color: '#666', fontSize: '14px' }}>请尝试上传更清晰的音频片段</div>
+                                <div style={{ fontWeight: 600, fontSize: '20px', margin: '12px 0 4px', color: reasonInfo.color }}>
+                                  {recognizeResult.failure_info?.reason_message || '未找到匹配歌曲'}
+                                </div>
+                                <div style={{ color: '#666', fontSize: '14px', marginTop: '4px' }}>
+                                  {recognizeResult.failure_info?.details[0] || '请尝试上传更清晰的音频片段'}
+                                </div>
                                 <div style={{ marginTop: '12px', fontSize: '13px', color: '#555' }}>
                                   耗时: {recognizeResult.processing_time_ms}ms
                                 </div>
                               </>
                             )}
                           </div>
+
+                          {!recognizeResult.match_found && recognizeResult.failure_info && (
+                            <div style={{ marginTop: '16px', padding: '16px', background: '#fff', borderRadius: '12px', boxShadow: '0 2px 8px rgba(0,0,0,0.08)' }}>
+                              <h4 style={{ margin: '0 0 12px', fontSize: '15px', color: '#333', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <span>{reasonInfo.icon}</span> 失败原因分析
+                              </h4>
+                              <div style={{
+                                padding: '12px 16px',
+                                background: reasonInfo.bgColor,
+                                borderRadius: '8px',
+                                borderLeft: `4px solid ${reasonInfo.color}`,
+                                marginBottom: '12px',
+                              }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+                                  <span style={{ 
+                                    padding: '3px 10px', 
+                                    borderRadius: '12px', 
+                                    background: reasonInfo.color + '20',
+                                    color: reasonInfo.color,
+                                    fontWeight: 600,
+                                    fontSize: '12px'
+                                  }}>
+                                    {recognizeResult.failure_info.reason_code === 'empty_library' ? '曲库为空' :
+                                     recognizeResult.failure_info.reason_code === 'audio_too_short' ? '音频过短' :
+                                     recognizeResult.failure_info.reason_code === 'weak_features' ? '特征不足' :
+                                     recognizeResult.failure_info.reason_code === 'near_match' ? '接近匹配' :
+                                     '无匹配'}
+                                  </span>
+                                  <span style={{ fontSize: '13px', color: '#444', fontWeight: 500 }}>
+                                    {recognizeResult.failure_info.reason_message}
+                                  </span>
+                                </div>
+                                <ul style={{ margin: 0, paddingLeft: '20px', fontSize: '12px', color: '#666' }}>
+                                  {recognizeResult.failure_info.details.map((detail, idx) => (
+                                    <li key={idx} style={{ marginBottom: '4px' }}>{detail}</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            </div>
+                          )}
+
+                          {!recognizeResult.match_found && hasRemediation && (
+                            <div style={{ marginTop: '16px', padding: '16px', background: '#fff', borderRadius: '12px', boxShadow: '0 2px 8px rgba(0,0,0,0.08)' }}>
+                              <h4 style={{ margin: '0 0 12px', fontSize: '15px', color: '#333', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <span>🔧</span> 补救操作
+                              </h4>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                {recognizeResult.failure_info!.remediation.map((action, idx) => {
+                                  const actionColors: Record<string, { bg: string; color: string; border: string }> = {
+                                    promote_sample: { bg: '#e8f5e9', color: '#2e7d32', border: '#a5d6a7' },
+                                    re_record: { bg: '#e3f2fd', color: '#1565c0', border: '#90caf9' },
+                                    upload_song: { bg: '#fff3e0', color: '#e65100', border: '#ffcc80' },
+                                    review_task: { bg: '#f3e5f5', color: '#7b1fa2', border: '#ce93d8' },
+                                    view_failed_samples: { bg: '#f5f5f5', color: '#616161', border: '#e0e0e0' },
+                                  };
+                                  const colors = actionColors[action.action_type] || actionColors.view_failed_samples;
+                                  return (
+                                    <button
+                                      key={idx}
+                                      onClick={() => handleRemediationAction(action)}
+                                      style={{
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '12px',
+                                        padding: '12px 16px',
+                                        background: colors.bg,
+                                        border: `1px solid ${colors.border}`,
+                                        borderRadius: '8px',
+                                        cursor: 'pointer',
+                                        textAlign: 'left',
+                                        width: '100%',
+                                        transition: 'all 0.2s ease',
+                                      }}
+                                      onMouseEnter={(e) => {
+                                        e.currentTarget.style.transform = 'translateY(-1px)';
+                                        e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.1)';
+                                      }}
+                                      onMouseLeave={(e) => {
+                                        e.currentTarget.style.transform = 'translateY(0)';
+                                        e.currentTarget.style.boxShadow = 'none';
+                                      }}
+                                    >
+                                      <span style={{
+                                        padding: '4px 10px',
+                                        borderRadius: '6px',
+                                        background: colors.color,
+                                        color: '#fff',
+                                        fontSize: '12px',
+                                        fontWeight: 600,
+                                        whiteSpace: 'nowrap',
+                                        flexShrink: 0,
+                                      }}>
+                                        {action.label}
+                                      </span>
+                                      <span style={{ fontSize: '12px', color: '#555' }}>{action.description}</span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
 
                           <div style={{ marginTop: '16px', padding: '16px', background: '#fff', borderRadius: '12px', boxShadow: '0 2px 8px rgba(0,0,0,0.08)' }}>
                             <h4 style={{ margin: '0 0 12px', fontSize: '15px', color: '#333', display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -557,6 +808,63 @@ const App: React.FC = () => {
             setAddToPlaylistSong(null);
           }}
         />
+      )}
+      {promoteSampleId && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          zIndex: 1000,
+        }}
+        onClick={() => { setPromoteSampleId(null); setPromoteTitle(''); setPromoteArtist(''); }}
+        >
+          <div style={{ background: '#fff', borderRadius: '12px', padding: '24px', width: '400px', maxWidth: '90vw' }}
+          onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ margin: '0 0 16px', fontSize: '18px', color: '#333' }}>⭐ 录入为新歌曲</h3>
+            <p style={{ fontSize: '13px', color: '#666', marginBottom: '16px' }}>
+              将此未识别音频样本直接提升为指纹库中的新歌曲
+            </p>
+            <div style={{ marginBottom: '12px' }}>
+              <label style={{ display: 'block', fontSize: '13px', color: '#555', marginBottom: '4px', fontWeight: 500 }}>歌曲名称 *</label>
+              <input
+                type="text"
+                value={promoteTitle}
+                onChange={(e) => setPromoteTitle(e.target.value)}
+                placeholder="请输入歌曲名称"
+                style={{ width: '100%', padding: '10px 12px', border: '1px solid #ddd', borderRadius: '8px', fontSize: '14px', boxSizing: 'border-box' }}
+              />
+            </div>
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{ display: 'block', fontSize: '13px', color: '#555', marginBottom: '4px', fontWeight: 500 }}>艺术家（可选）</label>
+              <input
+                type="text"
+                value={promoteArtist}
+                onChange={(e) => setPromoteArtist(e.target.value)}
+                placeholder="请输入艺术家名称"
+                style={{ width: '100%', padding: '10px 12px', border: '1px solid #ddd', borderRadius: '8px', fontSize: '14px', boxSizing: 'border-box' }}
+              />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button
+                onClick={() => { setPromoteSampleId(null); setPromoteTitle(''); setPromoteArtist(''); }}
+                style={{ padding: '8px 20px', border: '1px solid #ddd', borderRadius: '8px', background: '#fff', color: '#666', cursor: 'pointer', fontSize: '14px' }}
+              >
+                取消
+              </button>
+              <button
+                onClick={handlePromoteSubmit}
+                disabled={!promoteTitle.trim() || isPromoting}
+                style={{
+                  padding: '8px 20px', border: 'none', borderRadius: '8px',
+                  background: promoteTitle.trim() && !isPromoting ? '#2e7d32' : '#a5d6a7',
+                  color: '#fff', cursor: promoteTitle.trim() && !isPromoting ? 'pointer' : 'not-allowed',
+                  fontSize: '14px', fontWeight: 500,
+                }}
+              >
+                {isPromoting ? '录入中...' : '确认录入'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
       <OnboardingGuide />
     </div>

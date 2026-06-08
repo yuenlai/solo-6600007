@@ -24,12 +24,28 @@ export interface SimilarSong {
   reason: string;
 }
 
+export interface RemediationAction {
+  action_type: string;
+  label: string;
+  description: string;
+  target: string | null;
+}
+
+export interface FailureInfo {
+  reason_code: string;
+  reason_message: string;
+  details: string[];
+  remediation: RemediationAction[];
+}
+
 export interface RecognizeResult {
   match_found: boolean;
   song: { id: string; title: string; artist: string | null; duration_sec: number | null } | null;
   confidence: number;
   processing_time_ms: number;
   similar_songs: SimilarSong[];
+  failure_info: FailureInfo | null;
+  sample_id: string | null;
 }
 
 export interface SpectrogramData {
