@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { Song } from '../types';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import { Song, SongStatus, AudioSource } from '../types';
 import { useAudioStore } from '../store/audio';
 import { SongUploader } from './SongUploader';
 
@@ -75,6 +75,54 @@ export const SongLibrary: React.FC = () => {
     const m = Math.floor(sec / 60);
     const s = Math.floor(sec % 60);
     return `${m}:${String(s).padStart(2, '0')}`;
+  };
+
+  const formatDate = (dateStr?: string) => {
+    if (!dateStr) return '';
+    const d = new Date(dateStr);
+    return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  };
+
+  const getStatusStyle = (status?: SongStatus) => {
+    switch (status) {
+      case 'completed':
+        return { bg: '#e8f5e9', color: '#2e7d32', label: '已完成' };
+      case 'processing':
+        return { bg: '#e3f2fd', color: '#1565c0', label: '处理中' };
+      case 'pending':
+        return { bg: '#fff3e0', color: '#e65100', label: '待处理' };
+      case 'failed':
+        return { bg: '#ffebee', color: '#c62828', label: '失败' };
+      default:
+        return { bg: '#f5f5f5', color: '#666', label: '未知' };
+    }
+  };
+
+  const getSourceInfo = (source?: AudioSource | null) => {
+    switch (source) {
+      case 'microphone':
+        return { icon: '🎤', label: '录音' };
+      case 'file':
+        return { icon: '📁', label: '文件' };
+      case 'batch_import':
+        return { icon: '📦', label: '批量' };
+      case 'review':
+        return { icon: '🔍', label: '审核' };
+      case 'promoted':
+        return { icon: '⬆️', label: '提升' };
+      default:
+        return { icon: '📎', label: '其他' };
+    }
+  };
+
+  const getFingerprintInfo = (song: Song) => {
+    const peaksCount = song.fingerprint_peaks
+      ? (JSON.parse(song.fingerprint_peaks) as unknown[]).length
+      : 0;
+    const robustCount = song.fingerprint_robust
+      ? (JSON.parse(song.fingerprint_robust) as unknown[]).length
+      : 0;
+    return { peaksCount, robustCount };
   };
 
   const handlePlayPreview = async (song: Song, e: React.MouseEvent) => {
@@ -275,90 +323,126 @@ export const SongLibrary: React.FC = () => {
             )}
           </div>
         ) : (
-          displaySongs.map(s => (
-            <div
-              key={s.id}
-              onClick={() => setCurrentSongId(s.id)}
-              style={{
-                display: 'flex', alignItems: 'center', gap: '12px', padding: '12px',
-                marginBottom: '8px', borderRadius: '8px', border: '1px solid #e0e0e0',
-                background: '#fff', cursor: 'pointer', transition: 'all 0.2s',
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = '#f5f5f5';
-                e.currentTarget.style.borderColor = '#bdbdbd';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = '#fff';
-                e.currentTarget.style.borderColor = '#e0e0e0';
-              }}
-            >
-              <button
-                onClick={(e) => handlePlayPreview(s, e)}
-                disabled={deletingSongId === s.id}
+          displaySongs.map(s => {
+            const statusStyle = getStatusStyle(s.status);
+            const sourceInfo = getSourceInfo(s.source);
+            const fpInfo = getFingerprintInfo(s);
+            const dateStr = formatDate(s.created_at);
+
+            return (
+              <div
+                key={s.id}
+                onClick={() => setCurrentSongId(s.id)}
                 style={{
-                  width: '40px', height: '40px', borderRadius: '50%',
-                  background: playingSongId === s.id ? '#1976d2' : '#e8eaf6',
-                  color: playingSongId === s.id ? '#fff' : '#1976d2',
-                  border: 'none', cursor: 'pointer',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: '16px', flexShrink: 0,
+                  padding: '12px',
+                  marginBottom: '8px',
+                  borderRadius: '8px',
+                  border: '1px solid #e0e0e0',
+                  background: '#fff',
+                  cursor: 'pointer',
                   transition: 'all 0.2s',
                 }}
                 onMouseEnter={(e) => {
-                  if (playingSongId !== s.id) {
-                    e.currentTarget.style.background = '#c5cae9';
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  if (playingSongId !== s.id) {
-                    e.currentTarget.style.background = '#e8eaf6';
-                  }
-                }}
-              >
-                {playingSongId === s.id ? '⏸' : '▶'}
-              </button>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{
-                  fontWeight: 600, fontSize: '14px',
-                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                }}>{s.title}</div>
-                <div style={{ fontSize: '12px', color: '#888' }}>
-                  {s.artist || '未知艺术家'} · {formatDuration(s.duration_sec)}
-                </div>
-              </div>
-              <code style={{
-                fontSize: '10px', color: '#999', background: '#f5f5f5',
-                padding: '2px 6px', borderRadius: '4px', flexShrink: 0,
-                marginRight: '8px',
-              }}>{s.fingerprint_hash}</code>
-              <button
-                onClick={(e) => handleDeleteSong(s, e)}
-                disabled={deletingSongId === s.id || isDeletingSong}
-                style={{
-                  padding: '6px 12px',
-                  border: '1px solid #ffcdd2',
-                  background: deletingSongId === s.id ? '#ffebee' : '#fff',
-                  color: '#c62828',
-                  borderRadius: '4px',
-                  cursor: deletingSongId === s.id ? 'wait' : 'pointer',
-                  fontSize: '12px',
-                  flexShrink: 0,
-                  transition: 'all 0.2s',
-                }}
-                onMouseEnter={(e) => {
-                  if (deletingSongId !== s.id) {
-                    e.currentTarget.style.background = '#ffebee';
-                  }
+                  e.currentTarget.style.background = '#f5f5f5';
+                  e.currentTarget.style.borderColor = '#bdbdbd';
                 }}
                 onMouseLeave={(e) => {
                   e.currentTarget.style.background = '#fff';
+                  e.currentTarget.style.borderColor = '#e0e0e0';
                 }}
               >
-                {deletingSongId === s.id ? '删除中...' : '🗑️ 删除'}
-              </button>
-            </div>
-          ))
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <button
+                    onClick={(e) => handlePlayPreview(s, e)}
+                    disabled={deletingSongId === s.id}
+                    style={{
+                      width: '40px', height: '40px', borderRadius: '50%',
+                      background: playingSongId === s.id ? '#1976d2' : '#e8eaf6',
+                      color: playingSongId === s.id ? '#fff' : '#1976d2',
+                      border: 'none', cursor: 'pointer',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: '16px', flexShrink: 0,
+                      transition: 'all 0.2s',
+                    }}
+                    onMouseEnter={(e) => {
+                      if (playingSongId !== s.id) {
+                        e.currentTarget.style.background = '#c5cae9';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (playingSongId !== s.id) {
+                        e.currentTarget.style.background = '#e8eaf6';
+                      }
+                    }}
+                  >
+                    {playingSongId === s.id ? '⏸' : '▶'}
+                  </button>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '2px' }}>
+                      <span style={{
+                        fontWeight: 600, fontSize: '14px',
+                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        flex: 1, minWidth: 0,
+                      }}>{s.title}</span>
+                      {s.status && (
+                        <span style={{
+                          fontSize: '10px',
+                          padding: '1px 6px',
+                          borderRadius: '10px',
+                          background: statusStyle.bg,
+                          color: statusStyle.color,
+                          fontWeight: 500,
+                          whiteSpace: 'nowrap',
+                          flexShrink: 0,
+                        }}>{statusStyle.label}</span>
+                      )}
+                      <span style={{
+                        fontSize: '10px',
+                        padding: '1px 6px',
+                        borderRadius: '10px',
+                        background: '#f3e5f5',
+                        color: '#7b1fa2',
+                        whiteSpace: 'nowrap',
+                        flexShrink: 0,
+                      }}>{sourceInfo.icon} {sourceInfo.label}</span>
+                    </div>
+                    <div style={{ fontSize: '12px', color: '#888', marginBottom: '3px' }}>
+                      {s.artist || '未知艺术家'} · {formatDuration(s.duration_sec)}{dateStr ? ` · 📅 ${dateStr}` : ''}
+                    </div>
+                    <div style={{ fontSize: '11px', color: '#aaa', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span>🔐 特征点: {fpInfo.peaksCount}</span>
+                      <span>🛡️ 鲁棒: {fpInfo.robustCount}</span>
+                    </div>
+                  </div>
+                  <button
+                    onClick={(e) => handleDeleteSong(s, e)}
+                    disabled={deletingSongId === s.id || isDeletingSong}
+                    style={{
+                      padding: '6px 12px',
+                      border: '1px solid #ffcdd2',
+                      background: deletingSongId === s.id ? '#ffebee' : '#fff',
+                      color: '#c62828',
+                      borderRadius: '4px',
+                      cursor: deletingSongId === s.id ? 'wait' : 'pointer',
+                      fontSize: '12px',
+                      flexShrink: 0,
+                      transition: 'all 0.2s',
+                    }}
+                    onMouseEnter={(e) => {
+                      if (deletingSongId !== s.id) {
+                        e.currentTarget.style.background = '#ffebee';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = '#fff';
+                    }}
+                  >
+                    {deletingSongId === s.id ? '删除中...' : '🗑️ 删除'}
+                  </button>
+                </div>
+              </div>
+            );
+          })
         )}
       </div>
     </div>
